@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
+from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.types import BotCommand
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -109,6 +111,45 @@ async def safe_edit_message_text(
             "Telegram edit_text skipped after retries | chat={} message_id={} error={}",
             message.chat.id,
             message.message_id,
+            str(error),
+        )
+        return False
+
+
+async def safe_delete_my_commands(bot: Bot, *, scope: object | None = None) -> bool:
+    """Безопасно удаляет команды бота, не прерывая запуск при timeout."""
+
+    try:
+        await _run_with_network_retry(
+            lambda: bot.delete_my_commands(scope=scope),
+        )
+        return True
+    except TelegramNetworkError as error:
+        logger.warning(
+            "Telegram delete_my_commands skipped after retries | scope={} error={}",
+            type(scope).__name__ if scope is not None else "default",
+            str(error),
+        )
+        return False
+
+
+async def safe_set_my_commands(
+    bot: Bot,
+    commands: list[BotCommand],
+    *,
+    scope: object | None = None,
+) -> bool:
+    """Безопасно устанавливает команды бота, не прерывая запуск при timeout."""
+
+    try:
+        await _run_with_network_retry(
+            lambda: bot.set_my_commands(commands, scope=scope),
+        )
+        return True
+    except TelegramNetworkError as error:
+        logger.warning(
+            "Telegram set_my_commands skipped after retries | scope={} error={}",
+            type(scope).__name__ if scope is not None else "default",
             str(error),
         )
         return False

@@ -16,6 +16,7 @@ from loguru import logger
 from bot.config import get_settings
 from bot.db import close_database, init_database
 from bot.handlers import get_routers
+from bot.services.telegram_safe import safe_delete_my_commands, safe_set_my_commands
 
 
 def configure_logger() -> None:
@@ -45,9 +46,10 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Запустить бота"),
     ]
 
-    await bot.delete_my_commands()
-    await bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
-    await bot.set_my_commands(
+    await safe_delete_my_commands(bot)
+    await safe_delete_my_commands(bot, scope=BotCommandScopeAllPrivateChats())
+    await safe_set_my_commands(
+        bot,
         user_commands,
         scope=BotCommandScopeDefault(),
     )
