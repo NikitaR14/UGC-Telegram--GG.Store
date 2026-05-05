@@ -3,11 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot.db import BotRepository, Video, VideoStatus, get_session_factory
-from bot.handlers.user.start import WELCOME_TEXT
+from bot.handlers.user.start import WELCOME_TEXT, show_callback_screen
 from bot.keyboards.user_kb import get_main_menu_keyboard, get_my_videos_keyboard
 from bot.services.video import shorten_video_title
 from bot.ui.emojis import CLIPS_TEXT
@@ -58,11 +57,11 @@ async def return_from_my_videos(callback: CallbackQuery) -> None:
     """Возвращает пользователя из истории видео в меню."""
 
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_text(
-            WELCOME_TEXT,
-            reply_markup=get_main_menu_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        WELCOME_TEXT,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 async def render_videos_page(callback: CallbackQuery, page: int) -> None:
@@ -158,17 +157,11 @@ async def safe_edit_text(
     text: str,
     reply_markup: object,
 ) -> None:
-    """Безопасно редактирует сообщение, игнорируя одинаковое содержимое."""
+    """Показывает страницу с fallback на новое сообщение."""
 
-    if callback.message is None:
-        return
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    except TelegramBadRequest as error:
-        if "message is not modified" in str(error):
-            return
-        raise
+    await show_callback_screen(
+        callback,
+        text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=True,
+    )

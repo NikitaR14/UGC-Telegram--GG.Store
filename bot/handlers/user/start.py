@@ -1,8 +1,10 @@
 from aiogram import Bot, F
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommandScopeChat, CallbackQuery, Message
+from loguru import logger
 
 from bot.db import BotRepository, get_session_factory
 from bot.keyboards.user_kb import get_main_menu_keyboard
@@ -24,6 +26,40 @@ async def clear_chat_commands(chat_id: int, bot: Bot) -> None:
     """Удаляет персональные команды для конкретного чата."""
 
     await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
+
+
+async def show_callback_screen(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    reply_markup: object,
+    disable_web_page_preview: bool = False,
+) -> None:
+    """Показывает экран по callback с fallback на новое сообщение."""
+
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        return
+    except TelegramBadRequest as error:
+        if "message is not modified" in str(error):
+            return
+        logger.warning(
+            "User screen fallback to new message | user={} data={} error={}",
+            callback.from_user.id,
+            callback.data,
+            str(error),
+        )
+    await callback.message.answer(
+        text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )
 
 
 @router.message(Command("start"))
@@ -55,7 +91,8 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if callback.message is not None:
         await clear_chat_commands(callback.from_user.id, callback.bot)
-        await callback.message.answer(
+        await show_callback_screen(
+            callback,
             WELCOME_TEXT,
             reply_markup=get_main_menu_keyboard(),
         )

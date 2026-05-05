@@ -10,7 +10,7 @@ from loguru import logger
 
 from bot.db import BotRepository, get_session_factory
 from bot.handlers.admin.moderation import notify_admins_about_video
-from bot.handlers.user.start import WELCOME_TEXT
+from bot.handlers.user.start import WELCOME_TEXT, show_callback_screen
 from bot.keyboards.user_kb import (
     get_add_video_keyboard,
     get_main_menu_keyboard,
@@ -45,11 +45,11 @@ async def request_video_url(callback: CallbackQuery, state: FSMContext) -> None:
 
     await callback.answer()
     await state.set_state(AddVideoState.waiting_for_url)
-    if callback.message is not None:
-        await callback.message.edit_text(
-            REQUEST_VIDEO_TEXT,
-            reply_markup=get_add_video_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        REQUEST_VIDEO_TEXT,
+        reply_markup=get_add_video_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "video:add:back")
@@ -58,11 +58,11 @@ async def return_from_add_video(callback: CallbackQuery, state: FSMContext) -> N
 
     await state.clear()
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_text(
-            WELCOME_TEXT,
-            reply_markup=get_main_menu_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        WELCOME_TEXT,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 @router.message(AddVideoState.waiting_for_url)

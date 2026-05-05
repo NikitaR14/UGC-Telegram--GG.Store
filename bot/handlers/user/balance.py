@@ -3,13 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import BotRepository, PaymentMethod, VideoStatus, Withdrawal, get_session_factory
-from bot.handlers.user.start import WELCOME_TEXT
+from bot.handlers.user.start import WELCOME_TEXT, show_callback_screen
 from bot.keyboards.user_kb import (
     get_balance_keyboard,
     get_main_menu_keyboard,
@@ -49,11 +48,11 @@ async def choose_payment_method(callback: CallbackQuery) -> None:
     """Открывает экран выбора способа вывода."""
 
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_text(
-            "Выберите способ вывода:",
-            reply_markup=get_payment_methods_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        "Выберите способ вывода:",
+        reply_markup=get_payment_methods_keyboard(),
+    )
 
 
 @router.callback_query(F.data.startswith("balance:method:"))
@@ -68,11 +67,11 @@ async def request_payment_details(callback: CallbackQuery, state: FSMContext) ->
     await state.update_data(payment_method=method)
     await state.set_state(BalanceState.waiting_for_payment_details)
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_text(
-            "Введите данные счёта:",
-            reply_markup=get_payment_methods_keyboard(back_only=True),
-        )
+    await show_callback_screen(
+        callback,
+        "Введите данные счёта:",
+        reply_markup=get_payment_methods_keyboard(back_only=True),
+    )
 
 
 @router.message(BalanceState.waiting_for_payment_details)
@@ -161,20 +160,21 @@ async def return_from_balance_screens(callback: CallbackQuery, state: FSMContext
         await render_balance(callback)
         return
 
-    if callback.message is not None:
-        await callback.message.edit_text(
-            WELCOME_TEXT,
-            reply_markup=get_main_menu_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        WELCOME_TEXT,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 async def render_balance(callback: CallbackQuery) -> None:
     """Рендерит экран баланса."""
 
-    if callback.from_user is None or callback.message is None:
+    if callback.from_user is None:
         return
 
-    await callback.message.edit_text(
+    await show_callback_screen(
+        callback,
         await build_balance_text(callback.from_user.id),
         reply_markup=get_balance_keyboard(),
     )
@@ -314,13 +314,10 @@ async def safe_edit_text(
     text: str,
     reply_markup: object,
 ) -> None:
-    """Безопасно редактирует сообщение, игнорируя одинаковое содержимое."""
+    """Показывает экран с fallback на новое сообщение."""
 
-    if callback.message is None:
-        return
-    try:
-        await callback.message.edit_text(text, reply_markup=reply_markup)
-    except TelegramBadRequest as error:
-        if "message is not modified" in str(error):
-            return
-        raise
+    await show_callback_screen(
+        callback,
+        text,
+        reply_markup=reply_markup,
+    )
