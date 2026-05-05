@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 from bot.db import BotRepository, Video, VideoStatus, get_session_factory
 from bot.handlers.user.start import WELCOME_TEXT, show_callback_screen
 from bot.keyboards.user_kb import get_main_menu_keyboard, get_my_videos_keyboard
+from bot.services.telegram_safe import safe_callback_answer
 from bot.services.video import shorten_video_title
 from bot.ui.emojis import CLIPS_TEXT
 
@@ -32,7 +33,7 @@ PLATFORM_LABELS = {
 async def show_my_videos(callback: CallbackQuery) -> None:
     """Показывает первую страницу истории видео пользователя."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await render_videos_page(callback, page=1)
 
 
@@ -40,7 +41,7 @@ async def show_my_videos(callback: CallbackQuery) -> None:
 async def paginate_my_videos(callback: CallbackQuery) -> None:
     """Переключает страницы истории видео."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     page = parse_page_number(callback.data)
     await render_videos_page(callback, page=page)
 
@@ -49,14 +50,14 @@ async def paginate_my_videos(callback: CallbackQuery) -> None:
 async def ignore_videos_page_label(callback: CallbackQuery) -> None:
     """Тихо подтверждает нажатие на индикатор страницы."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "videos:back")
 async def return_from_my_videos(callback: CallbackQuery) -> None:
     """Возвращает пользователя из истории видео в меню."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_callback_screen(
         callback,
         WELCOME_TEXT,

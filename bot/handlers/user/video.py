@@ -16,6 +16,7 @@ from bot.keyboards.user_kb import (
     get_main_menu_keyboard,
     get_return_to_menu_keyboard,
 )
+from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
 from bot.services.video import is_fallback_title, detect_platform, resolve_video_title, resolve_video_title_quickly
 from bot.ui.emojis import SUCCESS_TEXT, VIDEO_TEXT
 
@@ -43,7 +44,7 @@ class AddVideoState(StatesGroup):
 async def request_video_url(callback: CallbackQuery, state: FSMContext) -> None:
     """Открывает сценарий добавления видео."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await state.set_state(AddVideoState.waiting_for_url)
     await show_callback_screen(
         callback,
@@ -57,7 +58,7 @@ async def return_from_add_video(callback: CallbackQuery, state: FSMContext) -> N
     """Возвращает пользователя из сценария добавления видео в меню."""
 
     await state.clear()
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_callback_screen(
         callback,
         WELCOME_TEXT,
@@ -73,7 +74,8 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
         return
 
     if not message.text:
-        await message.answer(
+        await safe_message_answer(
+            message,
             VIDEO_LINK_ERROR_TEXT,
             reply_markup=get_add_video_keyboard(),
         )
@@ -81,7 +83,8 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
 
     platform = detect_platform(message.text)
     if platform is None:
-        await message.answer(
+        await safe_message_answer(
+            message,
             VIDEO_LINK_ERROR_TEXT,
             reply_markup=get_add_video_keyboard(),
         )
@@ -112,7 +115,8 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
         username=message.from_user.username,
     )
     await state.clear()
-    await message.answer(
+    await safe_message_answer(
+        message,
         f"{SUCCESS_TEXT} Ссылка принята! Заявка "
         f"#{video.video_id:05d} отправлена на рассмотрение.\n"
         "Следить за статусом можно в разделе «Мои видео».",

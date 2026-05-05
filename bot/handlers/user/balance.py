@@ -16,6 +16,7 @@ from bot.keyboards.user_kb import (
     get_withdrawals_keyboard,
 )
 from bot.services.notification import notify_admins_about_payment_details
+from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
 from bot.ui.emojis import BALANCE_TEXT, CARD_TEXT, PAYMENTS_TEXT, STAR_TEXT, SUCCESS_TEXT, USDT_TEXT
 
 router = Router(name="user.balance")
@@ -39,7 +40,7 @@ async def show_balance(callback: CallbackQuery, state: FSMContext) -> None:
     """Показывает экран баланса пользователя."""
 
     await state.clear()
-    await callback.answer()
+    await safe_callback_answer(callback)
     await render_balance(callback)
 
 
@@ -47,7 +48,7 @@ async def show_balance(callback: CallbackQuery, state: FSMContext) -> None:
 async def choose_payment_method(callback: CallbackQuery) -> None:
     """Открывает экран выбора способа вывода."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_callback_screen(
         callback,
         "Выберите способ вывода:",
@@ -61,12 +62,12 @@ async def request_payment_details(callback: CallbackQuery, state: FSMContext) ->
 
     method = parse_method(callback.data)
     if method is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     await state.update_data(payment_method=method)
     await state.set_state(BalanceState.waiting_for_payment_details)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_callback_screen(
         callback,
         "Введите данные счёта:",
@@ -85,7 +86,8 @@ async def save_payment_details(message: Message, state: FSMContext) -> None:
     payment_method = data.get("payment_method")
     if not isinstance(payment_method, str):
         await state.clear()
-        await message.answer(
+        await safe_message_answer(
+            message,
             WELCOME_TEXT,
             reply_markup=get_main_menu_keyboard(),
         )
@@ -113,8 +115,9 @@ async def save_payment_details(message: Message, state: FSMContext) -> None:
         status=VideoStatus.APPROVED.value,
     )
     await state.clear()
-    await message.answer(f"{SUCCESS_TEXT} Счёт успешно сохранён!")
-    await message.answer(
+    await safe_message_answer(message, f"{SUCCESS_TEXT} Счёт успешно сохранён!")
+    await safe_message_answer(
+        message,
         await build_balance_text(message.from_user.id),
         reply_markup=get_balance_keyboard(),
     )
@@ -130,7 +133,7 @@ async def save_payment_details(message: Message, state: FSMContext) -> None:
 async def show_withdrawals_history(callback: CallbackQuery) -> None:
     """Показывает первую страницу истории выплат."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await render_withdrawals_page(callback, page=1)
 
 
@@ -138,7 +141,7 @@ async def show_withdrawals_history(callback: CallbackQuery) -> None:
 async def paginate_withdrawals(callback: CallbackQuery) -> None:
     """Переключает страницы истории выплат."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     page = parse_page_number(callback.data)
     await render_withdrawals_page(callback, page=page)
 
@@ -147,7 +150,7 @@ async def paginate_withdrawals(callback: CallbackQuery) -> None:
 async def ignore_withdrawals_page_label(callback: CallbackQuery) -> None:
     """Подтверждает нажатие на индикатор страницы выплат."""
 
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.in_({"balance:back", "withdrawals:back", "balance:return"}))
@@ -155,7 +158,7 @@ async def return_from_balance_screens(callback: CallbackQuery, state: FSMContext
     """Возвращает пользователя из экрана баланса или истории выплат."""
 
     await state.clear()
-    await callback.answer()
+    await safe_callback_answer(callback)
     if callback.data in {"withdrawals:back", "balance:return"}:
         await render_balance(callback)
         return

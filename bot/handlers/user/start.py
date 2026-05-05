@@ -1,6 +1,6 @@
 from aiogram import Bot, F
 from aiogram import Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommandScopeChat, CallbackQuery, Message
@@ -8,6 +8,7 @@ from loguru import logger
 
 from bot.db import BotRepository, get_session_factory
 from bot.keyboards.user_kb import get_main_menu_keyboard
+from bot.services.telegram_safe import safe_callback_answer, safe_edit_message_text, safe_message_answer
 from bot.ui.emojis import RATE_TEXT, STAR_TEXT
 
 router = Router(name="user.start")
@@ -25,7 +26,14 @@ WELCOME_TEXT = (
 async def clear_chat_commands(chat_id: int, bot: Bot) -> None:
     """Удаляет персональные команды для конкретного чата."""
 
-    await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
+    try:
+        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
+    except (TelegramBadRequest, TelegramNetworkError) as error:
+        logger.warning(
+            "Failed to clear chat commands | chat_id={} error={}",
+            chat_id,
+            str(error),
+        )
 
 
 async def show_callback_screen(
@@ -39,23 +47,16 @@ async def show_callback_screen(
 
     if callback.message is None:
         return
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=disable_web_page_preview,
-        )
+    was_edited = await safe_edit_message_text(
+        callback.message,
+        text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )
+    if was_edited:
         return
-    except TelegramBadRequest as error:
-        if "message is not modified" in str(error):
-            return
-        logger.warning(
-            "User screen fallback to new message | user={} data={} error={}",
-            callback.from_user.id,
-            callback.data,
-            str(error),
-        )
-    await callback.message.answer(
+    await safe_message_answer(
+        callback.message,
         text,
         reply_markup=reply_markup,
         disable_web_page_preview=disable_web_page_preview,
@@ -77,7 +78,8 @@ async def send_welcome(message: Message, state: FSMContext) -> None:
         username=message.from_user.username,
     )
     await clear_chat_commands(message.from_user.id, message.bot)
-    await message.answer(
+    await safe_message_answer(
+        message,
         WELCOME_TEXT,
         reply_markup=get_main_menu_keyboard(),
     )
@@ -88,7 +90,7 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     """Открывает главное меню по отдельной кнопке."""
 
     await state.clear()
-    await callback.answer()
+    await safe_callback_answer(callback)
     if callback.message is not None:
         await clear_chat_commands(callback.from_user.id, callback.bot)
         await show_callback_screen(
@@ -102,4 +104,4 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_menu_placeholder(callback: CallbackQuery) -> None:
     """Показывает заглушку для разделов, которые будут реализованы позже."""
 
-    await callback.answer(PLACEHOLDER_TEXT, show_alert=True)
+    await safe_callback_answer(callback, PLACEHOLDER_TEXT, show_alert=True)
