@@ -1,10 +1,8 @@
-from aiogram import Bot, F
+from aiogram import F
 from aiogram import Router
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BotCommandScopeChat, CallbackQuery, Message
-from loguru import logger
+from aiogram.types import CallbackQuery, Message
 
 from bot.db import BotRepository, get_session_factory
 from bot.keyboards.user_kb import get_main_menu_keyboard
@@ -21,19 +19,6 @@ WELCOME_TEXT = (
     "зарабатывать до <b>50 000 ₽</b> в месяц!\n\n"
     f"{RATE_TEXT} <b>Ставка:</b> 250 ₽ за 1 000 просмотров."
 )
-
-
-async def clear_chat_commands(chat_id: int, bot: Bot) -> None:
-    """Удаляет персональные команды для конкретного чата."""
-
-    try:
-        await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
-    except (TelegramBadRequest, TelegramNetworkError) as error:
-        logger.warning(
-            "Failed to clear chat commands | chat_id={} error={}",
-            chat_id,
-            str(error),
-        )
 
 
 async def show_callback_screen(
@@ -77,7 +62,6 @@ async def send_welcome(message: Message, state: FSMContext) -> None:
         user_id=message.from_user.id,
         username=message.from_user.username,
     )
-    await clear_chat_commands(message.from_user.id, message.bot)
     await safe_message_answer(
         message,
         WELCOME_TEXT,
@@ -91,13 +75,11 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.clear()
     await safe_callback_answer(callback)
-    if callback.message is not None:
-        await clear_chat_commands(callback.from_user.id, callback.bot)
-        await show_callback_screen(
-            callback,
-            WELCOME_TEXT,
-            reply_markup=get_main_menu_keyboard(),
-        )
+    await show_callback_screen(
+        callback,
+        WELCOME_TEXT,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 @router.callback_query(F.data.startswith("menu:"))
