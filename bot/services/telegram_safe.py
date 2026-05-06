@@ -42,6 +42,17 @@ async def safe_callback_answer(
             lambda: callback.answer(text=text, show_alert=show_alert),
         )
         return True
+    except TelegramBadRequest as error:
+        error_text = str(error).lower()
+        if "query is too old" in error_text or "query id is invalid" in error_text:
+            logger.warning(
+                "Telegram callback answer skipped for stale query | user={} data={} error={}",
+                callback.from_user.id,
+                callback.data,
+                str(error),
+            )
+            return False
+        raise
     except TelegramNetworkError as error:
         logger.warning(
             "Telegram callback answer skipped after retries | user={} data={} error={}",
