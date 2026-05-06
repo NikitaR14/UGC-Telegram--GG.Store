@@ -6,6 +6,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllPrivateChats,
@@ -64,6 +65,24 @@ async def setup_bot_commands_background(bot: Bot) -> None:
         logger.warning("Background bot command setup failed | error={}", str(error))
 
 
+async def run_polling_forever(dispatcher: Dispatcher, bot: Bot) -> None:
+    """Держит polling активным и переживает временные сетевые сбои Telegram."""
+
+    retry_delay_seconds = 3
+    while True:
+        try:
+            logger.info("Starting bot polling")
+            await dispatcher.start_polling(bot)
+            return
+        except TelegramNetworkError as error:
+            logger.warning(
+                "Polling interrupted by Telegram network error | retry_in={}s error={}",
+                retry_delay_seconds,
+                str(error),
+            )
+            await asyncio.sleep(retry_delay_seconds)
+
+
 async def main() -> None:
     """Запускает Telegram-бота."""
 
@@ -79,10 +98,11 @@ async def main() -> None:
     dispatcher = build_dispatcher()
     asyncio.create_task(setup_bot_commands_background(bot))
 
-    logger.info("Bot startup complete")
+    logger.info("Bot process initialized")
     try:
-        await dispatcher.start_polling(bot)
+        await run_polling_forever(dispatcher, bot)
     finally:
+        await bot.session.close()
         await close_database()
 
 
