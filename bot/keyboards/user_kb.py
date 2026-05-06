@@ -10,6 +10,7 @@ from bot.ui.emojis import (
     PAYMENTS_BUTTON_ICON_ID,
     RIGHT_ARROW_BUTTON_ICON_ID,
     SUPPORT_BUTTON_ICON_ID,
+    TERMS_BUTTON_ICON_ID,
     USDT_BUTTON_ICON_ID,
     VIDEO_BUTTON_ICON_ID,
 )
@@ -18,6 +19,9 @@ COMMUNITY_URL = "https://t.me/ggstore_hub"
 SUPPORT_URL = "https://t.me/ggstore_support"
 BANNERS_URL = (
     "https://drive.google.com/drive/folders/1mO-3VxlnzKgIDRvRngZEsKlg54rT1iPt?usp=sharing"
+)
+TERMS_URL = (
+    "https://docs.google.com/document/d/1g-WjQ5IC8mzoyJNnwwLKuW3W_opqpd5B9M471J40apo/edit?usp=sharing"
 )
 
 
@@ -66,6 +70,13 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
                     text="Скачать баннеры",
                     icon_custom_emoji_id=BANNERS_BUTTON_ICON_ID,
                     url=BANNERS_URL,
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Условия",
+                    icon_custom_emoji_id=TERMS_BUTTON_ICON_ID,
+                    url=TERMS_URL,
                 ),
             ],
         ],
