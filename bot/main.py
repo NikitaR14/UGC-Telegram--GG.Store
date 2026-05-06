@@ -55,6 +55,15 @@ async def setup_bot_commands(bot: Bot) -> None:
     )
 
 
+async def setup_bot_commands_background(bot: Bot) -> None:
+    """Обновляет команды бота в фоне, не задерживая старт polling."""
+
+    try:
+        await setup_bot_commands(bot)
+    except Exception as error:
+        logger.warning("Background bot command setup failed | error={}", str(error))
+
+
 async def main() -> None:
     """Запускает Telegram-бота."""
 
@@ -67,8 +76,8 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    await setup_bot_commands(bot)
     dispatcher = build_dispatcher()
+    asyncio.create_task(setup_bot_commands_background(bot))
 
     logger.info("Bot startup complete")
     try:
