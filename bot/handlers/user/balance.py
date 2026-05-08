@@ -234,14 +234,14 @@ def build_withdrawals_text(withdrawals: list[Withdrawal]) -> str:
     header = f"{PAYMENTS_TEXT} <b>История выплат</b>\n\n"
     footer = (
         "\n\n"
-        "<blockquote>Минимальная сумма вывода — 300 ₽\n"
+        "<blockquote>Минимальная сумма вывода — 500 ₽\n"
         "Срок выплаты — 3 рабочих дня</blockquote>"
     )
     if not withdrawals:
         return (
             header
             + "Пока выплат нет.\n\n"
-            + "<blockquote>Минимальная сумма вывода — 300 ₽\n"
+            + "<blockquote>Минимальная сумма вывода — 500 ₽\n"
             + "Срок выплаты — 3 рабочих дня</blockquote>"
         )
 
