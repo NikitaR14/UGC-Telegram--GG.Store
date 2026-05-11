@@ -32,8 +32,8 @@ def is_metrika_enabled() -> bool:
 
     settings = get_settings()
     return bool(
-        settings.yandex_metrika_counter_id
-        and settings.yandex_metrika_secret_token
+        _normalize_optional(settings.yandex_metrika_counter_id)
+        and _normalize_optional(settings.yandex_metrika_secret_token)
     )
 
 
@@ -45,29 +45,34 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
         return
 
     settings = get_settings()
+    counter_id = _normalize_optional(settings.yandex_metrika_counter_id)
+    secret_token = _normalize_optional(settings.yandex_metrika_secret_token)
+    if not counter_id or not secret_token:
+        return
+
     page_url = _build_virtual_page_url(goal)
     payload = _build_event_params(user, goal)
     try:
         await _send_metrika_hit(
             {
-                "tid": settings.yandex_metrika_counter_id,
+                "tid": counter_id,
                 "cid": str(user.user_id),
                 "t": "pageview",
                 "dr": METRIKA_REFERRER,
                 "dl": page_url,
                 "dt": f"Telegram bot: {goal.value}",
-                "ms": settings.yandex_metrika_secret_token,
+                "ms": secret_token,
             },
         )
         await _send_metrika_hit(
             {
-                "tid": settings.yandex_metrika_counter_id,
+                "tid": counter_id,
                 "cid": str(user.user_id),
                 "t": "event",
                 "ea": goal.value,
                 "dl": page_url,
                 "params": json.dumps(payload, ensure_ascii=False),
-                "ms": settings.yandex_metrika_secret_token,
+                "ms": secret_token,
             },
         )
     except (aiohttp.ClientError, TimeoutError) as error:
@@ -103,8 +108,17 @@ def _build_virtual_page_url(goal: MetrikaGoal) -> str:
     """Возвращает виртуальный URL экрана бота для Метрики."""
 
     settings = get_settings()
-    base_url = settings.yandex_metrika_base_url.rstrip("/")
+    base_url = settings.yandex_metrika_base_url.strip().rstrip("/")
     return f"{base_url}/{goal.value}"
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    """Убирает случайные пробелы из значения настройки."""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _format_username(username: str | None) -> str | None:
@@ -136,7 +150,7 @@ async def _send_metrika_hit(params: dict[str, str | None]) -> None:
     timeout = aiohttp.ClientTimeout(total=METRIKA_TIMEOUT_SECONDS)
     clean_params = {key: value for key, value in params.items() if value is not None}
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(METRIKA_COLLECT_URL, data=clean_params) as response:
+        async with session.get(METRIKA_COLLECT_URL, params=clean_params) as response:
             if response.status >= 400:
                 response_text = await response.text()
                 raise MetrikaRequestError(response.status, response_text)

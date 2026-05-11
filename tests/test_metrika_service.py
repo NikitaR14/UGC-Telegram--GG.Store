@@ -59,6 +59,20 @@ def test_metrika_disabled_without_secret_token(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_metrika_enabled_strips_config_values(monkeypatch) -> None:
+    """Проверяет защиту от пробелов при копировании настроек."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("YANDEX_METRIKA_COUNTER_ID", " 109115307 ")
+    monkeypatch.setenv("YANDEX_METRIKA_SECRET_TOKEN", " token-with-spaces ")
+    get_settings.cache_clear()
+
+    assert metrika.is_metrika_enabled() is True
+    assert metrika._normalize_optional(" token ") == "token"
+    get_settings.cache_clear()
+
+
 def test_format_safe_error_hides_request_url_and_secret() -> None:
     """Проверяет, что secret token не попадёт в лог ошибки."""
 
