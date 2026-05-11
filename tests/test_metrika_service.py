@@ -80,3 +80,17 @@ def test_format_safe_error_hides_request_url_and_secret() -> None:
     assert safe_error == "HTTP 400: Bad request"
     assert "secret-token" not in safe_error
     assert "mc.yandex.ru" not in safe_error
+
+
+def test_format_safe_error_includes_limited_response_text() -> None:
+    """Проверяет безопасный текст ответа Метрики для диагностики."""
+
+    error = metrika.MetrikaRequestError(
+        status=400,
+        response_text="invalid parameter" * 30,
+    )
+
+    safe_error = metrika._format_safe_error(error)
+
+    assert safe_error.startswith("HTTP 400: invalid parameter")
+    assert len(safe_error) <= len("HTTP 400: ") + metrika.METRIKA_ERROR_TEXT_LIMIT

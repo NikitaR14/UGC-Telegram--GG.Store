@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -17,6 +16,7 @@ from bot.db.models import User
 METRIKA_COLLECT_URL = "https://mc.yandex.ru/collect"
 METRIKA_TIMEOUT_SECONDS = 3
 METRIKA_REFERRER = "https://t.me/"
+METRIKA_ERROR_TEXT_LIMIT = 200
 
 
 class MetrikaGoal(StrEnum):
@@ -56,7 +56,6 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
                 "dr": METRIKA_REFERRER,
                 "dl": page_url,
                 "dt": f"Telegram bot: {goal.value}",
-                "et": str(int(time.time())),
                 "ms": settings.yandex_metrika_secret_token,
             },
         )
@@ -68,7 +67,6 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
                 "ea": goal.value,
                 "dl": page_url,
                 "params": json.dumps(payload, ensure_ascii=False),
-                "et": str(int(time.time())),
                 "ms": settings.yandex_metrika_secret_token,
             },
         )
@@ -139,12 +137,25 @@ async def _send_metrika_hit(params: dict[str, str | None]) -> None:
     clean_params = {key: value for key, value in params.items() if value is not None}
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(METRIKA_COLLECT_URL, data=clean_params) as response:
-            response.raise_for_status()
+            if response.status >= 400:
+                response_text = await response.text()
+                raise MetrikaRequestError(response.status, response_text)
+
+
+class MetrikaRequestError(aiohttp.ClientError):
+    """Ошибка ответа Measurement Protocol без чувствительных данных."""
+
+    def __init__(self, status: int, response_text: str) -> None:
+        self.status = status
+        self.response_text = response_text[:METRIKA_ERROR_TEXT_LIMIT]
+        super().__init__(f"HTTP {status}: {self.response_text}")
 
 
 def _format_safe_error(error: BaseException) -> str:
     """Форматирует ошибку без URL и secret token."""
 
+    if isinstance(error, MetrikaRequestError):
+        return f"HTTP {error.status}: {error.response_text}"
     if isinstance(error, ClientResponseError):
         return f"HTTP {error.status}: {error.message}"
     return error.__class__.__name__
