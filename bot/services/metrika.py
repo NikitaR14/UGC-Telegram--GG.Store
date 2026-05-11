@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import json
+import time
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
+
+import aiohttp
+from loguru import logger
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from bot.config import get_settings
+from bot.db.models import User
+
+METRIKA_COLLECT_URL = "https://mc.yandex.ru/collect"
+METRIKA_TIMEOUT_SECONDS = 3
+
+
+class MetrikaGoal(StrEnum):
+    """Идентификаторы целей в Яндекс Метрике."""
+
+    BOT_START = "bot_start"
+    ADD_VIDEO = "add_video"
+    DOWNLOAD_BANNER = "download_banner"
+
+
+def is_metrika_enabled() -> bool:
+    """Проверяет, достаточно ли настроек для отправки событий."""
+
+    settings = get_settings()
+    return bool(
+        settings.yandex_metrika_counter_id
+        and settings.yandex_metrika_secret_token
+    )
+
+
+async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
+    """Отправляет виртуальный визит и достижение цели в Яндекс Метрику."""
+
+    if not is_metrika_enabled():
+        logger.info("Yandex Metrika tracking skipped | goal={} reason=disabled", goal.value)
+        return
+
+    settings = get_settings()
+    page_url = _build_virtual_page_url(goal)
+    payload = _build_event_params(user, goal)
+    try:
+        await _send_metrika_hit(
+            {
+                "tid": settings.yandex_metrika_counter_id,
+                "cid": str(user.user_id),
+                "t": "pageview",
+                "dl": page_url,
+                "dt": f"Telegram bot: {goal.value}",
+                "et": str(int(time.time())),
+                "ms": settings.yandex_metrika_secret_token,
+            },
+        )
+        await _send_metrika_hit(
+            {
+                "tid": settings.yandex_metrika_counter_id,
+                "cid": str(user.user_id),
+                "t": "event",
+                "ea": goal.value,
+                "dl": page_url,
+                "params": json.dumps(payload, ensure_ascii=False),
+                "et": str(int(time.time())),
+                "ms": settings.yandex_metrika_secret_token,
+            },
+        )
+    except (aiohttp.ClientError, TimeoutError) as error:
+        logger.warning(
+            "Yandex Metrika tracking failed | goal={} user={} error={}",
+            goal.value,
+            user.user_id,
+            str(error),
+        )
+
+
+def _build_event_params(user: User, goal: MetrikaGoal) -> dict[str, Any]:
+    """Собирает безопасные параметры события для аналитики."""
+
+    return {
+        "telegram": {
+            "user_id": user.user_id,
+            "username": _format_username(user.username),
+            "phone": None,
+        },
+        "finance": {
+            "balance": float(user.balance or 0),
+            "total_withdrawn": float(user.total_withdrawn or 0),
+        },
+        "bot": {
+            "goal": goal.value,
+            "time_in_bot_seconds": _get_time_in_bot_seconds(user),
+        },
+    }
+
+
+def _build_virtual_page_url(goal: MetrikaGoal) -> str:
+    """Возвращает виртуальный URL экрана бота для Метрики."""
+
+    settings = get_settings()
+    base_url = settings.yandex_metrika_base_url.rstrip("/")
+    return f"{base_url}/{goal.value}"
+
+
+def _format_username(username: str | None) -> str | None:
+    """Форматирует Telegram username как тег пользователя."""
+
+    if not username:
+        return None
+    return username if username.startswith("@") else f"@{username}"
+
+
+def _get_time_in_bot_seconds(user: User) -> int:
+    """Считает примерное время с первого появления пользователя в боте."""
+
+    created_at = user.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return max(0, int((datetime.now(UTC) - created_at).total_seconds()))
+
+
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(min=1, max=3),
+    retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+    reraise=True,
+)
+async def _send_metrika_hit(params: dict[str, str | None]) -> None:
+    """Отправляет один hit в Measurement Protocol Метрики."""
+
+    timeout = aiohttp.ClientTimeout(total=METRIKA_TIMEOUT_SECONDS)
+    clean_params = {key: value for key, value in params.items() if value is not None}
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(METRIKA_COLLECT_URL, params=clean_params) as response:
+            response.raise_for_status()

@@ -16,6 +16,7 @@ from bot.keyboards.user_kb import (
     get_main_menu_keyboard,
     get_return_to_menu_keyboard,
 )
+from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
 from bot.services.video import is_fallback_title, detect_platform, resolve_video_title, resolve_video_title_quickly
 from bot.ui.emojis import SUCCESS_TEXT, VIDEO_TEXT
@@ -44,6 +45,12 @@ class AddVideoState(StatesGroup):
 async def request_video_url(callback: CallbackQuery, state: FSMContext) -> None:
     """Открывает сценарий добавления видео."""
 
+    repository = BotRepository(get_session_factory())
+    user = await repository.upsert_user(
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+    )
+    asyncio.create_task(track_metrika_goal(user, MetrikaGoal.ADD_VIDEO))
     await safe_callback_answer(callback)
     await state.set_state(AddVideoState.waiting_for_url)
     await show_callback_screen(

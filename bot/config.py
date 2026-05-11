@@ -16,6 +16,18 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
     auto_init_db: bool = Field(default=False, alias="AUTO_INIT_DB")
+    yandex_metrika_counter_id: str | None = Field(
+        default=None,
+        alias="YANDEX_METRIKA_COUNTER_ID",
+    )
+    yandex_metrika_secret_token: str | None = Field(
+        default=None,
+        alias="YANDEX_METRIKA_SECRET_TOKEN",
+    )
+    yandex_metrika_base_url: str = Field(
+        default="https://t.me/ggstore_bot",
+        alias="YANDEX_METRIKA_BASE_URL",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

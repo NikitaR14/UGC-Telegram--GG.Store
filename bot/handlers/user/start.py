@@ -1,3 +1,5 @@
+import asyncio
+
 from aiogram import F
 from aiogram import Router
 from aiogram.filters import Command
@@ -5,7 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import BotRepository, get_session_factory
-from bot.keyboards.user_kb import get_main_menu_keyboard
+from bot.keyboards.user_kb import get_banners_keyboard, get_main_menu_keyboard
+from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.telegram_safe import safe_callback_answer, safe_edit_message_text, safe_message_answer
 from bot.ui.emojis import RATE_TEXT, STAR_TEXT
 
@@ -58,10 +61,11 @@ async def send_welcome(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     repository = BotRepository(get_session_factory())
-    await repository.upsert_user(
+    user = await repository.upsert_user(
         user_id=message.from_user.id,
         username=message.from_user.username,
     )
+    asyncio.create_task(track_metrika_goal(user, MetrikaGoal.BOT_START))
     await safe_message_answer(
         message,
         WELCOME_TEXT,
@@ -79,6 +83,28 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
         callback,
         WELCOME_TEXT,
         reply_markup=get_main_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "menu:banners")
+async def show_banners_link(callback: CallbackQuery) -> None:
+    """Фиксирует цель скачивания баннеров и показывает ссылку."""
+
+    if callback.from_user is None:
+        return
+
+    repository = BotRepository(get_session_factory())
+    user = await repository.upsert_user(
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+    )
+    asyncio.create_task(track_metrika_goal(user, MetrikaGoal.DOWNLOAD_BANNER))
+    await safe_callback_answer(callback)
+    await show_callback_screen(
+        callback,
+        "Баннеры GG.Store доступны по кнопке ниже.",
+        reply_markup=get_banners_keyboard(),
+        disable_web_page_preview=True,
     )
 
 

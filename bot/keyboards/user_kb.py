@@ -69,7 +69,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Скачать баннеры",
                     icon_custom_emoji_id=BANNERS_BUTTON_ICON_ID,
-                    url=BANNERS_URL,
+                    callback_data="menu:banners",
                 ),
             ],
             [
@@ -77,6 +77,28 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
                     text="Условия",
                     icon_custom_emoji_id=TERMS_BUTTON_ICON_ID,
                     url=TERMS_URL,
+                ),
+            ],
+        ],
+    )
+
+
+def get_banners_keyboard() -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру со ссылкой на баннеры и меню."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Открыть баннеры",
+                    icon_custom_emoji_id=BANNERS_BUTTON_ICON_ID,
+                    url=BANNERS_URL,
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Главное меню",
+                    callback_data="menu:main",
                 ),
             ],
         ],
