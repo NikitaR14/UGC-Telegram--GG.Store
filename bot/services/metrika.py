@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 import aiohttp
+from aiohttp import ClientResponseError
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -15,6 +16,7 @@ from bot.db.models import User
 
 METRIKA_COLLECT_URL = "https://mc.yandex.ru/collect"
 METRIKA_TIMEOUT_SECONDS = 3
+METRIKA_REFERRER = "https://t.me/"
 
 
 class MetrikaGoal(StrEnum):
@@ -51,6 +53,7 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
                 "tid": settings.yandex_metrika_counter_id,
                 "cid": str(user.user_id),
                 "t": "pageview",
+                "dr": METRIKA_REFERRER,
                 "dl": page_url,
                 "dt": f"Telegram bot: {goal.value}",
                 "et": str(int(time.time())),
@@ -74,7 +77,7 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
             "Yandex Metrika tracking failed | goal={} user={} error={}",
             goal.value,
             user.user_id,
-            str(error),
+            _format_safe_error(error),
         )
 
 
@@ -135,5 +138,13 @@ async def _send_metrika_hit(params: dict[str, str | None]) -> None:
     timeout = aiohttp.ClientTimeout(total=METRIKA_TIMEOUT_SECONDS)
     clean_params = {key: value for key, value in params.items() if value is not None}
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(METRIKA_COLLECT_URL, params=clean_params) as response:
+        async with session.post(METRIKA_COLLECT_URL, data=clean_params) as response:
             response.raise_for_status()
+
+
+def _format_safe_error(error: BaseException) -> str:
+    """Форматирует ошибку без URL и secret token."""
+
+    if isinstance(error, ClientResponseError):
+        return f"HTTP {error.status}: {error.message}"
+    return error.__class__.__name__

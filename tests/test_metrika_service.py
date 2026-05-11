@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from aiohttp import ClientResponseError, RequestInfo
+from multidict import CIMultiDictProxy, CIMultiDict
+
 from bot.config import get_settings
 from bot.db.models import User
 from bot.services import metrika
@@ -54,3 +57,26 @@ def test_metrika_disabled_without_secret_token(monkeypatch) -> None:
 
     assert metrika.is_metrika_enabled() is False
     get_settings.cache_clear()
+
+
+def test_format_safe_error_hides_request_url_and_secret() -> None:
+    """Проверяет, что secret token не попадёт в лог ошибки."""
+
+    request_info = RequestInfo(
+        url="https://mc.yandex.ru/collect?ms=secret-token",
+        method="POST",
+        headers=CIMultiDictProxy(CIMultiDict()),
+        real_url="https://mc.yandex.ru/collect?ms=secret-token",
+    )
+    error = ClientResponseError(
+        request_info=request_info,
+        history=(),
+        status=400,
+        message="Bad request",
+    )
+
+    safe_error = metrika._format_safe_error(error)
+
+    assert safe_error == "HTTP 400: Bad request"
+    assert "secret-token" not in safe_error
+    assert "mc.yandex.ru" not in safe_error
