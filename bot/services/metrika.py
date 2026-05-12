@@ -17,6 +17,7 @@ METRIKA_COLLECT_URL = "https://mc.yandex.ru/collect"
 METRIKA_TIMEOUT_SECONDS = 3
 METRIKA_REFERRER = "https://t.me/"
 METRIKA_ERROR_TEXT_LIMIT = 200
+METRIKA_CURRENCY = "RUB"
 
 
 class MetrikaGoal(StrEnum):
@@ -60,6 +61,14 @@ async def track_metrika_goal(
     page_url = _build_virtual_page_url(goal)
     payload = _build_event_params(user, goal, extra_params=extra_params)
     try:
+        event_params = _build_event_hit_params(
+            counter_id=counter_id,
+            client_id=str(user.user_id),
+            goal=goal,
+            page_url=page_url,
+            payload=payload,
+            secret_token=secret_token,
+        )
         pageview_status = await _send_metrika_hit(
             {
                 "tid": counter_id,
@@ -71,17 +80,7 @@ async def track_metrika_goal(
                 "ms": secret_token,
             },
         )
-        event_status = await _send_metrika_hit(
-            {
-                "tid": counter_id,
-                "cid": str(user.user_id),
-                "t": "event",
-                "ea": goal.value,
-                "dl": page_url,
-                "params": json.dumps(payload, ensure_ascii=False),
-                "ms": secret_token,
-            },
-        )
+        event_status = await _send_metrika_hit(event_params)
         logger.info(
             "Yandex Metrika tracking sent | goal={} user={} pageview_status={} event_status={}",
             goal.value,
@@ -124,6 +123,50 @@ def _build_event_params(
     if extra_params:
         params["extra"] = extra_params
     return params
+
+
+def _build_event_hit_params(
+    *,
+    counter_id: str,
+    client_id: str,
+    goal: MetrikaGoal,
+    page_url: str,
+    payload: dict[str, Any],
+    secret_token: str,
+) -> dict[str, str]:
+    """Собирает параметры event-хита для Measurement Protocol."""
+
+    params = {
+        "tid": counter_id,
+        "cid": client_id,
+        "t": "event",
+        "dr": METRIKA_REFERRER,
+        "dl": page_url,
+        "ea": goal.value,
+        "params": json.dumps(payload, ensure_ascii=False),
+        "ms": secret_token,
+    }
+    goal_value = _extract_goal_value(goal, payload)
+    if goal_value is not None:
+        params["ev"] = str(goal_value)
+        params["cu"] = METRIKA_CURRENCY
+    return params
+
+
+def _extract_goal_value(goal: MetrikaGoal, payload: dict[str, Any]) -> float | None:
+    """Возвращает стоимость цели для Метрики, если она применима."""
+
+    if goal != MetrikaGoal.PAYOUT_SUM:
+        return None
+    extra = payload.get("extra")
+    if not isinstance(extra, dict):
+        return None
+    payout_amount = extra.get("payout_amount")
+    if not isinstance(payout_amount, int | float):
+        return None
+    if payout_amount <= 0:
+        return None
+    return float(payout_amount)
 
 
 def _build_virtual_page_url(goal: MetrikaGoal) -> str:

@@ -52,6 +52,48 @@ def test_build_virtual_page_url_uses_configured_base_url(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_build_event_hit_params_adds_goal_value_for_payout() -> None:
+    """Проверяет передачу стоимости цели для суммы выплат."""
+
+    payload = {
+        "extra": {
+            "video_id": 7,
+            "payout_amount": 500.0,
+        },
+    }
+
+    params = metrika._build_event_hit_params(
+        counter_id="109115307",
+        client_id="12345",
+        goal=metrika.MetrikaGoal.PAYOUT_SUM,
+        page_url="https://t.me/test_bot/payout_sum",
+        payload=payload,
+        secret_token="secret",
+    )
+
+    assert params["ea"] == "payout_sum"
+    assert params["dr"] == metrika.METRIKA_REFERRER
+    assert params["ev"] == "500.0"
+    assert params["cu"] == "RUB"
+
+
+def test_build_event_hit_params_skips_goal_value_for_regular_goal() -> None:
+    """Проверяет, что обычные цели не получают стоимость выплаты."""
+
+    params = metrika._build_event_hit_params(
+        counter_id="109115307",
+        client_id="12345",
+        goal=metrika.MetrikaGoal.BOT_START,
+        page_url="https://t.me/test_bot/bot_start",
+        payload={},
+        secret_token="secret",
+    )
+
+    assert params["ea"] == "bot_start"
+    assert "ev" not in params
+    assert "cu" not in params
+
+
 def test_metrika_disabled_without_secret_token(monkeypatch) -> None:
     """Проверяет, что без secret token интеграция не активируется."""
 
