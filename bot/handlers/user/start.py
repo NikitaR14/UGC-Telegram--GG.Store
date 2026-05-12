@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.db import BotRepository, get_session_factory
+from bot.db import BotRepository, User, get_session_factory
 from bot.keyboards.user_kb import get_banners_keyboard, get_main_menu_keyboard
 from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.telegram_safe import safe_callback_answer, safe_edit_message_text, safe_message_answer
@@ -15,6 +15,7 @@ from bot.ui.emojis import RATE_TEXT, STAR_TEXT
 router = Router(name="user.start")
 
 PLACEHOLDER_TEXT = "Раздел будет доступен на следующем этапе."
+TIME_IN_BOT_DELAY_SECONDS = 15
 
 WELCOME_TEXT = (
     f"{STAR_TEXT} <b>Зарабатывай вместе с GG.Store с помощью коротких роликов!</b>\n\n"
@@ -66,7 +67,7 @@ async def send_welcome(message: Message, state: FSMContext) -> None:
         username=message.from_user.username,
     )
     asyncio.create_task(track_metrika_goal(user, MetrikaGoal.BOT_START))
-    asyncio.create_task(track_metrika_goal(user, MetrikaGoal.TIME_IN_BOT))
+    asyncio.create_task(track_time_in_bot_after_delay(user))
     await safe_message_answer(
         message,
         WELCOME_TEXT,
@@ -85,6 +86,13 @@ async def show_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
         WELCOME_TEXT,
         reply_markup=get_main_menu_keyboard(),
     )
+
+
+async def track_time_in_bot_after_delay(user: User) -> None:
+    """Отправляет цель времени в боте после минимальной задержки."""
+
+    await asyncio.sleep(TIME_IN_BOT_DELAY_SECONDS)
+    await track_metrika_goal(user, MetrikaGoal.TIME_IN_BOT)
 
 
 @router.callback_query(F.data == "menu:banners")
