@@ -53,7 +53,7 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
     page_url = _build_virtual_page_url(goal)
     payload = _build_event_params(user, goal)
     try:
-        await _send_metrika_hit(
+        pageview_status = await _send_metrika_hit(
             {
                 "tid": counter_id,
                 "cid": str(user.user_id),
@@ -64,7 +64,7 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
                 "ms": secret_token,
             },
         )
-        await _send_metrika_hit(
+        event_status = await _send_metrika_hit(
             {
                 "tid": counter_id,
                 "cid": str(user.user_id),
@@ -74,6 +74,13 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
                 "params": json.dumps(payload, ensure_ascii=False),
                 "ms": secret_token,
             },
+        )
+        logger.info(
+            "Yandex Metrika tracking sent | goal={} user={} pageview_status={} event_status={}",
+            goal.value,
+            user.user_id,
+            pageview_status,
+            event_status,
         )
     except (aiohttp.ClientError, TimeoutError) as error:
         logger.warning(
@@ -144,7 +151,7 @@ def _get_time_in_bot_seconds(user: User) -> int:
     retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
     reraise=True,
 )
-async def _send_metrika_hit(params: dict[str, str | None]) -> None:
+async def _send_metrika_hit(params: dict[str, str | None]) -> int:
     """Отправляет один hit в Measurement Protocol Метрики."""
 
     timeout = aiohttp.ClientTimeout(total=METRIKA_TIMEOUT_SECONDS)
@@ -154,6 +161,7 @@ async def _send_metrika_hit(params: dict[str, str | None]) -> None:
             if response.status >= 400:
                 response_text = await response.text()
                 raise MetrikaRequestError(response.status, response_text)
+            return response.status
 
 
 class MetrikaRequestError(aiohttp.ClientError):
