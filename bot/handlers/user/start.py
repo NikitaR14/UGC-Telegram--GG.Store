@@ -66,6 +66,7 @@ async def send_welcome(message: Message, state: FSMContext) -> None:
         username=message.from_user.username,
     )
     asyncio.create_task(track_metrika_goal(user, MetrikaGoal.BOT_START))
+    asyncio.create_task(track_metrika_goal(user, MetrikaGoal.TIME_IN_BOT))
     await safe_message_answer(
         message,
         WELCOME_TEXT,

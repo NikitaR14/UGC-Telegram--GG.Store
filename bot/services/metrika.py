@@ -25,6 +25,8 @@ class MetrikaGoal(StrEnum):
     BOT_START = "bot_start"
     ADD_VIDEO = "add_video"
     DOWNLOAD_BANNER = "download_banner"
+    TIME_IN_BOT = "time_in_bot"
+    PAYOUT_SUM = "payout_sum"
 
 
 def is_metrika_enabled() -> bool:
@@ -37,7 +39,12 @@ def is_metrika_enabled() -> bool:
     )
 
 
-async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
+async def track_metrika_goal(
+    user: User,
+    goal: MetrikaGoal,
+    *,
+    extra_params: dict[str, Any] | None = None,
+) -> None:
     """Отправляет виртуальный визит и достижение цели в Яндекс Метрику."""
 
     if not is_metrika_enabled():
@@ -51,7 +58,7 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
         return
 
     page_url = _build_virtual_page_url(goal)
-    payload = _build_event_params(user, goal)
+    payload = _build_event_params(user, goal, extra_params=extra_params)
     try:
         pageview_status = await _send_metrika_hit(
             {
@@ -91,10 +98,15 @@ async def track_metrika_goal(user: User, goal: MetrikaGoal) -> None:
         )
 
 
-def _build_event_params(user: User, goal: MetrikaGoal) -> dict[str, Any]:
+def _build_event_params(
+    user: User,
+    goal: MetrikaGoal,
+    *,
+    extra_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Собирает безопасные параметры события для аналитики."""
 
-    return {
+    params: dict[str, Any] = {
         "telegram": {
             "user_id": user.user_id,
             "username": _format_username(user.username),
@@ -109,6 +121,9 @@ def _build_event_params(user: User, goal: MetrikaGoal) -> dict[str, Any]:
             "time_in_bot_seconds": _get_time_in_bot_seconds(user),
         },
     }
+    if extra_params:
+        params["extra"] = extra_params
+    return params
 
 
 def _build_virtual_page_url(goal: MetrikaGoal) -> str:

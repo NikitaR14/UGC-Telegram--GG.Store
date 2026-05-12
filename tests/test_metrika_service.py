@@ -21,15 +21,21 @@ def test_build_event_params_contains_safe_user_data() -> None:
         created_at=datetime.now(UTC) - timedelta(seconds=90),
     )
 
-    params = metrika._build_event_params(user, metrika.MetrikaGoal.BOT_START)
+    params = metrika._build_event_params(
+        user,
+        metrika.MetrikaGoal.PAYOUT_SUM,
+        extra_params={"video_id": 7, "payout_amount": 500.0},
+    )
 
     assert params["telegram"]["user_id"] == 12345
     assert params["telegram"]["username"] == "@creator"
     assert params["telegram"]["phone"] is None
     assert params["finance"]["balance"] == 500.0
     assert params["finance"]["total_withdrawn"] == 1500.0
-    assert params["bot"]["goal"] == "bot_start"
+    assert params["bot"]["goal"] == "payout_sum"
     assert params["bot"]["time_in_bot_seconds"] >= 80
+    assert params["extra"]["video_id"] == 7
+    assert params["extra"]["payout_amount"] == 500.0
 
 
 def test_build_virtual_page_url_uses_configured_base_url(monkeypatch) -> None:

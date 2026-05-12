@@ -31,6 +31,7 @@ from bot.services.notification import (
     notify_video_paid,
     notify_video_rejected,
 )
+from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.video import shorten_video_title
 from bot.ui.emojis import ERROR_TEXT, INBOX_TEXT, LIST_TEXT, PAYMENTS_TEXT, PIN_TEXT, SUCCESS_TEXT, SUPPORT_TEXT
 
@@ -388,6 +389,14 @@ async def mark_paid(callback: CallbackQuery) -> None:
     user = await repository.get_user(video.user_id)
     updated_video = await repository.get_video(video_id)
     if user is not None and updated_video is not None:
+        await track_metrika_goal(
+            user,
+            MetrikaGoal.PAYOUT_SUM,
+            extra_params={
+                "video_id": updated_video.video_id,
+                "payout_amount": float(updated_video.payout_amount or 0),
+            },
+        )
         await notify_video_paid(callback.bot, user, updated_video)
 
     await callback.answer("Выплата подтверждена.")
