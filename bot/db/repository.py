@@ -341,6 +341,18 @@ class BotRepository:
             await session.refresh(video)
             return video
 
+    async def touch_video_views_refresh(self, video_id: int) -> Video | None:
+        """Фиксирует время последней попытки обновления просмотров."""
+
+        async with self._session_factory() as session:
+            video = await session.get(Video, video_id)
+            if video is None:
+                return None
+            video.views_updated_at = datetime.now(UTC)
+            await session.commit()
+            await session.refresh(video)
+            return video
+
     async def _paginate(
         self,
         session: AsyncSession,

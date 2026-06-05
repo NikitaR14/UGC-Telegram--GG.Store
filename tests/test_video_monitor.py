@@ -25,6 +25,7 @@ class DummyRepository:
 
     def __init__(self) -> None:
         self.updated_payload: tuple[int, int, int | None] | None = None
+        self.touched_video_id: int | None = None
         self.video = build_video(video_id=33)
 
     async def update_video_views(
@@ -39,6 +40,9 @@ class DummyRepository:
         if self.video.video_id != video_id:
             return None
         return self.video
+
+    async def touch_video_views_refresh(self, video_id: int) -> None:
+        self.touched_video_id = video_id
 
 
 @pytest.mark.asyncio
@@ -99,6 +103,7 @@ async def test_refresh_single_video_views_keeps_previous_state_on_fetch_error(
     )
 
     assert repository.updated_payload is None
+    assert repository.touched_video_id == 17
 
 
 def test_get_highest_reached_threshold_returns_max_new_milestone() -> None:

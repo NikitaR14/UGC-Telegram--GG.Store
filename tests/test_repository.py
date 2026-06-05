@@ -353,3 +353,17 @@ async def test_get_videos_due_for_views_refresh_returns_only_stale_videos(
 
     assert any(video.video_id == first_video_id for video in due_videos)
     assert all(video.video_id != second_video_id for video in due_videos)
+
+
+@pytest.mark.asyncio
+async def test_touch_video_views_refresh_sets_attempt_timestamp(
+    repository: BotRepository,
+) -> None:
+    """Проверяет фиксацию времени неуспешной попытки обновления просмотров."""
+
+    video_id = await create_pending_video(repository)
+
+    touched_video = await repository.touch_video_views_refresh(video_id)
+
+    assert touched_video is not None
+    assert touched_video.views_updated_at is not None

@@ -137,6 +137,17 @@ def test_build_ytdlp_options_adds_proxy_from_env(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_is_expected_video_views_error_detects_known_noisy_cases() -> None:
+    """Проверяет распознавание ожидаемых ошибок недоступных видео."""
+
+    assert video_service.is_expected_video_views_error("ERROR: Unsupported URL: https://...")
+    assert video_service.is_expected_video_views_error("ERROR: [youtube] id: Video unavailable")
+    assert video_service.is_expected_video_views_error(
+        "ERROR: This user's account is likely either private or all of their videos are private",
+    )
+    assert video_service.is_expected_video_views_error("Some brand new unknown error") is False
+
+
 @pytest.mark.asyncio
 async def test_fetch_oembed_title_passes_proxy_to_request(monkeypatch) -> None:
     """Проверяет проброс proxy в HTTP-запрос oEmbed."""

@@ -57,6 +57,7 @@ async def refresh_single_video_views(
 
     views_count = await fetch_video_views(video.url)
     if views_count is None:
+        await repository.touch_video_views_refresh(video.video_id)
         return
 
     reached_threshold = get_highest_reached_threshold(

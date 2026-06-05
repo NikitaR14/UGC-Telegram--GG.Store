@@ -36,6 +36,17 @@ TITLE_RESOLUTION_TIMEOUT_SECONDS = 2.5
 VIEWS_RESOLUTION_TIMEOUT_SECONDS = 6
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
+EXPECTED_VIDEO_VIEWS_ERROR_MARKERS = (
+    "Unsupported URL",
+    "Video unavailable",
+    "This user's account is likely either private",
+    "Your IP address is blocked",
+    "Unable to extract secondary user ID",
+    "Unable to extract universal data",
+    "photo/",
+    "Private video",
+    "This video is unavailable",
+)
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -171,8 +182,24 @@ async def fetch_video_views(url: str) -> int | None:
         logger.warning("Video views resolution timed out | url={}", url)
         return None
     except Exception as error:
-        logger.warning("Video views extraction failed | url={} error={}", url, str(error))
+        log_video_views_error(url, str(error))
         return None
+
+
+def is_expected_video_views_error(error_text: str) -> bool:
+    """Определяет ожидаемые ошибки для недоступных или битых видео."""
+
+    normalized_error = error_text.strip()
+    return any(marker in normalized_error for marker in EXPECTED_VIDEO_VIEWS_ERROR_MARKERS)
+
+
+def log_video_views_error(url: str, error_text: str) -> None:
+    """Логирует сбой получения просмотров с понижением шума для ожидаемых кейсов."""
+
+    if is_expected_video_views_error(error_text):
+        logger.info("Video views skipped | url={} reason={}", url, error_text)
+        return
+    logger.warning("Video views extraction failed | url={} error={}", url, error_text)
 
 
 def extract_ytdlp_title(url: str) -> str | None:
