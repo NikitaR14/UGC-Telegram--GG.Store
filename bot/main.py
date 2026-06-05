@@ -5,6 +5,7 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import (
@@ -39,6 +40,35 @@ def build_dispatcher() -> Dispatcher:
     for router in get_routers():
         dispatcher.include_router(router)
     return dispatcher
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    """Очищает опциональное строковое значение от лишних пробелов."""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def build_bot_session() -> AiohttpSession | None:
+    """Создаёт HTTP-сессию бота с опциональным proxy."""
+
+    proxy_url = _normalize_optional(get_settings().telegram_proxy_url)
+    if not proxy_url:
+        return None
+
+    try:
+        session = AiohttpSession(proxy=proxy_url)
+    except RuntimeError as error:
+        logger.warning(
+            "Telegram proxy unavailable, fallback to direct connection | error={}",
+            str(error),
+        )
+        return None
+
+    logger.info("Telegram proxy enabled for bot session")
+    return session
 
 
 async def setup_bot_commands(bot: Bot) -> None:
@@ -92,8 +122,10 @@ async def main() -> None:
     if settings.auto_init_db:
         await init_database()
         logger.warning("Database schema auto-init enabled for local development")
+    session = build_bot_session()
     bot = Bot(
         token=settings.bot_token,
+        session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = build_dispatcher()

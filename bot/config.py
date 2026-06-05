@@ -16,6 +16,14 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
     auto_init_db: bool = Field(default=False, alias="AUTO_INIT_DB")
+    telegram_proxy_url: str | None = Field(
+        default=None,
+        alias="TELEGRAM_PROXY_URL",
+    )
+    video_proxy_url: str | None = Field(
+        default=None,
+        alias="VIDEO_PROXY_URL",
+    )
     yandex_metrika_counter_id: str | None = Field(
         default=None,
         alias="YANDEX_METRIKA_COUNTER_ID",

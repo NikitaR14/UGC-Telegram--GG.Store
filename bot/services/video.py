@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from loguru import logger
 
+from bot.config import get_settings
+
 try:
     from yt_dlp import YoutubeDL
 except ModuleNotFoundError:
@@ -34,6 +36,37 @@ TITLE_RESOLUTION_TIMEOUT_SECONDS = 2.5
 VIEWS_RESOLUTION_TIMEOUT_SECONDS = 6
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    """Очищает опциональное строковое значение от лишних пробелов."""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def get_video_proxy_url() -> str | None:
+    """Возвращает proxy для внешних видеосервисов, если он настроен."""
+
+    return _normalize_optional(get_settings().video_proxy_url)
+
+
+def build_ytdlp_options() -> dict[str, object]:
+    """Собирает базовые опции yt-dlp с опциональным proxy."""
+
+    options: dict[str, object] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "socket_timeout": REQUEST_TIMEOUT_SECONDS,
+    }
+    proxy_url = get_video_proxy_url()
+    if proxy_url:
+        options["proxy"] = proxy_url
+    return options
 
 
 def detect_platform(url: str) -> str | None:
@@ -148,13 +181,7 @@ def extract_ytdlp_title(url: str) -> str | None:
     if YoutubeDL is None:
         return None
 
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "socket_timeout": REQUEST_TIMEOUT_SECONDS,
-    }
+    options = build_ytdlp_options()
     with YoutubeDL(options) as ydl:
         payload = ydl.extract_info(url, download=False)
     if not isinstance(payload, dict):
@@ -171,13 +198,7 @@ def extract_ytdlp_views(url: str) -> int | None:
     if YoutubeDL is None:
         return None
 
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "socket_timeout": REQUEST_TIMEOUT_SECONDS,
-    }
+    options = build_ytdlp_options()
     with YoutubeDL(options) as ydl:
         payload = ydl.extract_info(url, download=False)
     if not isinstance(payload, dict):
@@ -204,14 +225,17 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
         ),
     }
     params = {"url": url, "format": "json"}
+    proxy_url = get_video_proxy_url()
+    request_kwargs = {
+        "params": params,
+        "allow_redirects": True,
+    }
+    if proxy_url:
+        request_kwargs["proxy"] = proxy_url
 
     try:
         async with ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(
-                oembed_url,
-                params=params,
-                allow_redirects=True,
-            ) as response:
+            async with session.get(oembed_url, **request_kwargs) as response:
                 if response.status >= 400:
                     logger.warning(
                         "oEmbed request failed | platform={} url={} status={}",
@@ -263,9 +287,13 @@ async def fetch_video_page(url: str) -> str | None:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
     }
+    proxy_url = get_video_proxy_url()
+    request_kwargs = {"allow_redirects": True}
+    if proxy_url:
+        request_kwargs["proxy"] = proxy_url
     try:
         async with ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, allow_redirects=True) as response:
+            async with session.get(url, **request_kwargs) as response:
                 if response.status >= 400:
                     logger.warning(
                         "Video page request failed | url={} status={}",

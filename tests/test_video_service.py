@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bot.config import get_settings
 from bot.services import video as video_service
 
 
@@ -120,3 +121,66 @@ def test_is_fallback_title_detects_url_and_generated_title() -> None:
     assert video_service.is_fallback_title(fallback, url, "youtube") is True
     assert video_service.is_fallback_title(url, url, "youtube") is True
     assert video_service.is_fallback_title("Настоящее название", url, "youtube") is False
+
+
+def test_build_ytdlp_options_adds_proxy_from_env(monkeypatch) -> None:
+    """Проверяет проброс proxy в yt-dlp при наличии настройки."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("VIDEO_PROXY_URL", "  http://127.0.0.1:8080  ")
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options()
+
+    assert options["proxy"] == "http://127.0.0.1:8080"
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_fetch_oembed_title_passes_proxy_to_request(monkeypatch) -> None:
+    """Проверяет проброс proxy в HTTP-запрос oEmbed."""
+
+    captured_kwargs: dict[str, object] = {}
+
+    class FakeResponse:
+        status = 200
+
+        async def json(self, content_type=None) -> dict[str, str]:
+            return {"title": "Тестовый ролик"}
+
+    class FakeResponseContext:
+        async def __aenter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, **kwargs) -> FakeResponseContext:
+            captured_kwargs.update(kwargs)
+            return FakeResponseContext()
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("VIDEO_PROXY_URL", "socks5://127.0.0.1:1080")
+    get_settings.cache_clear()
+    monkeypatch.setattr(video_service, "ClientSession", FakeSession)
+
+    title = await video_service.fetch_oembed_title(
+        "https://youtube.com/shorts/abc123",
+        "youtube",
+    )
+
+    assert title == "Тестовый ролик"
+    assert captured_kwargs["proxy"] == "socks5://127.0.0.1:1080"
+    get_settings.cache_clear()
