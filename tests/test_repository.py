@@ -294,3 +294,62 @@ async def test_set_admin_session_creates_missing_user(
 
     assert user is not None
     assert user.is_admin_session is True
+
+
+@pytest.mark.asyncio
+async def test_count_user_videos_returns_total_amount(
+    repository: BotRepository,
+) -> None:
+    """Проверяет подсчёт общего числа роликов пользователя."""
+
+    for index in range(3):
+        await create_pending_video_for_user(repository, TEST_USER_ID, index)
+
+    assert await repository.count_user_videos(TEST_USER_ID) == 3
+
+
+@pytest.mark.asyncio
+async def test_get_all_videos_page_returns_records_for_different_users(
+    repository: BotRepository,
+) -> None:
+    """Проверяет общий админский список всех видео пользователей."""
+
+    first_video_id = await create_pending_video_for_user(repository, TEST_USER_ID, 1)
+    second_video_id = await create_pending_video_for_user(repository, SECOND_USER_ID, 2)
+
+    page = await repository.get_all_videos_page(page=1)
+
+    assert len(page.items) == 2
+    assert {page.items[0].video_id, page.items[1].video_id} == {first_video_id, second_video_id}
+
+
+@pytest.mark.asyncio
+async def test_update_video_views_stores_latest_metrics(
+    repository: BotRepository,
+) -> None:
+    """Проверяет обновление просмотров и порога уведомлений у видео."""
+
+    video_id = await create_pending_video(repository)
+
+    updated_video = await repository.update_video_views(video_id, 20000, 20000)
+
+    assert updated_video is not None
+    assert updated_video.views_count == 20000
+    assert updated_video.last_notified_threshold == 20000
+    assert updated_video.views_updated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_videos_due_for_views_refresh_returns_only_stale_videos(
+    repository: BotRepository,
+) -> None:
+    """Проверяет выборку видео, которым пора обновлять просмотры."""
+
+    first_video_id = await create_pending_video_for_user(repository, TEST_USER_ID, 1)
+    second_video_id = await create_pending_video_for_user(repository, SECOND_USER_ID, 2)
+    await repository.update_video_views(second_video_id, 150)
+
+    due_videos = await repository.get_videos_due_for_views_refresh()
+
+    assert any(video.video_id == first_video_id for video in due_videos)
+    assert all(video.video_id != second_video_id for video in due_videos)

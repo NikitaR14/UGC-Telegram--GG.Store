@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Optional
 
@@ -18,6 +19,7 @@ from bot.db.models import (
 )
 
 DEFAULT_PAGE_SIZE = 5
+VIEWS_REFRESH_INTERVAL = timedelta(hours=4)
 
 
 @dataclass(slots=True)
@@ -253,6 +255,24 @@ class BotRepository:
             )
             return await self._paginate(session, query, Video.created_at, page, page_size)
 
+    async def get_all_videos_page(
+        self,
+        page: int,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> PageResult:
+        """Возвращает страницу всех видео для отдельного админского раздела."""
+
+        async with self._session_factory() as session:
+            query = select(Video).options(selectinload(Video.user))
+            return await self._paginate(session, query, Video.created_at, page, page_size)
+
+    async def count_user_videos(self, user_id: int) -> int:
+        """Считает общее количество загруженных видео пользователя."""
+
+        async with self._session_factory() as session:
+            query = select(func.count()).select_from(Video).where(Video.user_id == user_id)
+            return int(await session.scalar(query) or 0)
+
     async def count_user_videos_by_status(self, user_id: int, status: str) -> int:
         """Считает количество заявок пользователя в указанном статусе."""
 
@@ -285,6 +305,41 @@ class BotRepository:
             query = select(User.user_id).where(User.is_admin_session.is_(True))
             rows = await session.scalars(query)
             return list(rows)
+
+    async def get_videos_due_for_views_refresh(self, limit: int = 100) -> list[Video]:
+        """Возвращает видео, для которых пора обновить счётчик просмотров."""
+
+        cutoff = datetime.now(UTC) - VIEWS_REFRESH_INTERVAL
+        async with self._session_factory() as session:
+            query = (
+                select(Video)
+                .options(selectinload(Video.user))
+                .where(Video.views_updated_at.is_(None) | (Video.views_updated_at <= cutoff))
+                .order_by(Video.views_updated_at.asc().nullsfirst(), desc(Video.created_at))
+                .limit(limit)
+            )
+            rows = await session.scalars(query)
+            return list(rows)
+
+    async def update_video_views(
+        self,
+        video_id: int,
+        views_count: int,
+        last_notified_threshold: int | None = None,
+    ) -> Video | None:
+        """Обновляет просмотры видео и служебные поля мониторинга."""
+
+        async with self._session_factory() as session:
+            video = await session.get(Video, video_id)
+            if video is None:
+                return None
+            video.views_count = max(views_count, 0)
+            video.views_updated_at = datetime.now(UTC)
+            if last_notified_threshold is not None:
+                video.last_notified_threshold = last_notified_threshold
+            await session.commit()
+            await session.refresh(video)
+            return video
 
     async def _paginate(
         self,

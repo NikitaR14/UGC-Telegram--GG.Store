@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.ui.emojis import (
+    CLIPS_BUTTON_ICON_ID,
     INBOX_BUTTON_ICON_ID,
     ERROR_BUTTON_ICON_ID,
     LEFT_ARROW_BUTTON_ICON_ID,
@@ -40,6 +41,13 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
                     text="Отклонённые",
                     icon_custom_emoji_id=ERROR_BUTTON_ICON_ID,
                     callback_data="admin:menu:rejected",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Все видео",
+                    icon_custom_emoji_id=CLIPS_BUTTON_ICON_ID,
+                    callback_data="admin:menu:all",
                 ),
             ],
             [
@@ -211,3 +219,60 @@ def get_admin_waiting_details_keyboard(
             ],
         ],
     )
+
+
+def get_admin_all_videos_keyboard() -> InlineKeyboardMarkup:
+    """Возвращает кнопку перехода в раздел со всеми видео."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Все видео",
+                    callback_data="admin:all_videos:1",
+                ),
+            ],
+        ],
+    )
+
+
+def get_admin_all_videos_list_keyboard(
+    page: int,
+    total_pages: int,
+    has_items: bool,
+) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру раздела со всеми видео пользователей."""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if has_items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{page}/{total_pages}",
+                    callback_data="admin:all_videos:noop",
+                ),
+            ],
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Назад",
+                    icon_custom_emoji_id=LEFT_ARROW_BUTTON_ICON_ID,
+                    callback_data=f"admin:all_videos:{max(page - 1, 1)}",
+                ),
+                InlineKeyboardButton(
+                    text="Вперёд",
+                    icon_custom_emoji_id=RIGHT_ARROW_BUTTON_ICON_ID,
+                    callback_data=f"admin:all_videos:{min(page + 1, total_pages)}",
+                ),
+            ],
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Разделы",
+                callback_data="admin:dashboard",
+            ),
+        ],
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -19,6 +19,7 @@ from bot.keyboards.user_kb import (
 from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
 from bot.services.video import is_fallback_title, detect_platform, resolve_video_title, resolve_video_title_quickly
+from bot.services.video_monitor import refresh_video_views_now
 from bot.ui.emojis import SUCCESS_TEXT, VIDEO_TEXT
 
 router = Router(name="user.video")
@@ -26,7 +27,8 @@ router = Router(name="user.video")
 REQUEST_VIDEO_TEXT = (
     f"{VIDEO_TEXT} Пришлите ссылку на вертикальный видеоролик.\n\n"
     "Поддерживаемые платформы:\n"
-    "<blockquote>📺 TikTok, YouTube Shorts</blockquote>"
+    "<blockquote>📺 TikTok, YouTube Shorts.</blockquote>\n\n"
+    "Не забудьте добавить хэштег <b>#GGStoreUGCclips</b> при загрузке видео на хостинг!"
 )
 VIDEO_LINK_ERROR_TEXT = (
     '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> '
@@ -131,6 +133,7 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
     )
     if is_fallback_title(title, url, platform):
         asyncio.create_task(enrich_video_title(video.video_id, url, platform))
+    asyncio.create_task(refresh_video_views_now(message.bot, video.video_id))
 
 
 async def enrich_video_title(video_id: int, url: str, platform: str) -> None:

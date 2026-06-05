@@ -31,6 +31,7 @@ TITLE_CLEANUP_SUFFIXES = (
 )
 REQUEST_TIMEOUT_SECONDS = 10
 TITLE_RESOLUTION_TIMEOUT_SECONDS = 2.5
+VIEWS_RESOLUTION_TIMEOUT_SECONDS = 6
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
 
@@ -122,6 +123,25 @@ async def fetch_ytdlp_title(url: str) -> str | None:
         return None
 
 
+async def fetch_video_views(url: str) -> int | None:
+    """Пытается получить число просмотров ролика."""
+
+    if YoutubeDL is None:
+        return None
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(extract_ytdlp_views, url),
+            timeout=VIEWS_RESOLUTION_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning("Video views resolution timed out | url={}", url)
+        return None
+    except Exception as error:
+        logger.warning("Video views extraction failed | url={} error={}", url, str(error))
+        return None
+
+
 def extract_ytdlp_title(url: str) -> str | None:
     """Синхронно извлекает название ролика через yt-dlp."""
 
@@ -143,6 +163,29 @@ def extract_ytdlp_title(url: str) -> str | None:
     if not isinstance(title, str):
         return None
     return normalize_title(title)
+
+
+def extract_ytdlp_views(url: str) -> int | None:
+    """Синхронно извлекает число просмотров ролика через yt-dlp."""
+
+    if YoutubeDL is None:
+        return None
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "socket_timeout": REQUEST_TIMEOUT_SECONDS,
+    }
+    with YoutubeDL(options) as ydl:
+        payload = ydl.extract_info(url, download=False)
+    if not isinstance(payload, dict):
+        return None
+    view_count = payload.get("view_count")
+    if not isinstance(view_count, int):
+        return None
+    return max(view_count, 0)
 
 
 async def fetch_oembed_title(url: str, platform: str) -> str | None:

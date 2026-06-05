@@ -14,10 +14,13 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from bot.config import get_settings
 from bot.db import BotRepository, User, Video, get_session_factory
+from bot.keyboards.admin_kb import get_admin_all_videos_keyboard
+from bot.keyboards.user_kb import get_return_to_my_videos_keyboard
 from bot.services.video import shorten_video_title
 from bot.ui.emojis import BALANCE_TEXT, CARD_TEXT, DETAILS_ADDED_TEXT, ERROR_TEXT, SUCCESS_TEXT, STAR_TEXT, USDT_TEXT
 
 WITHDRAWAL_DAYS = 3
+VIDEO_VIEWS_MILESTONES = (5000, 20000, 50000, 100000)
 
 
 @retry(
@@ -26,10 +29,20 @@ WITHDRAWAL_DAYS = 3
     retry=retry_if_exception_type(TelegramNetworkError),
     reraise=True,
 )
-async def send_notification(bot: Bot, chat_id: int, text: str) -> None:
+async def send_notification(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """Отправляет уведомление пользователю с retry."""
 
-    await bot.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=True,
+    )
 
 
 @retry(
@@ -103,6 +116,50 @@ async def notify_video_paid(bot: Bot, user: User, video: Video) -> None:
     await _safe_notify(bot, user.user_id, text, "paid")
 
 
+async def notify_video_views_milestone(
+    bot: Bot,
+    user: User,
+    views_threshold: int,
+) -> None:
+    """Уведомляет пользователя о достижении нового порога просмотров."""
+
+    text = build_video_views_milestone_text(views_threshold)
+    await _safe_notify(
+        bot,
+        user.user_id,
+        text,
+        f"views_{views_threshold}",
+        reply_markup=get_return_to_my_videos_keyboard(),
+    )
+
+
+async def notify_admins_about_video_views_milestone(
+    bot: Bot,
+    user: User,
+    video: Video,
+) -> None:
+    """Уведомляет администраторов о достижении видео отметки в 100 000 просмотров."""
+
+    repository = BotRepository(get_session_factory())
+    admin_ids = await repository.get_active_admin_ids()
+    username_label = f"@{user.username}" if user.username else f"id {user.user_id}"
+    title = shorten_video_title(video.title or video.url)
+    text = (
+        f"Пользователь {username_label} набрал 100 000 просмотров на видео "
+        f"<a href=\"{video.url}\">{title}</a>. Необходимо выплатить вознаграждение. "
+        "Свяжитесь с пользователем для уточнения актуальных реквизитов."
+    )
+
+    for admin_id in admin_ids:
+        await _safe_notify_admin(
+            bot=bot,
+            admin_id=admin_id,
+            text=text,
+            operation="views_100000",
+            reply_markup=get_admin_all_videos_keyboard(),
+        )
+
+
 async def notify_admins_about_payment_details(
     bot: Bot,
     user: User,
@@ -135,11 +192,17 @@ async def notify_admins_about_payment_details(
         )
 
 
-async def _safe_notify(bot: Bot, user_id: int, text: str, operation: str) -> None:
+async def _safe_notify(
+    bot: Bot,
+    user_id: int,
+    text: str,
+    operation: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """Отправляет уведомление и логирует конкретные Telegram-ошибки."""
 
     try:
-        await send_notification(bot, user_id, text)
+        await send_notification(bot, user_id, text, reply_markup=reply_markup)
     except TelegramForbiddenError as error:
         logger.warning(
             "Notification forbidden | user={} operation={} error={}",
@@ -224,3 +287,32 @@ def build_applications_line(approved_video_ids: list[int]) -> str:
 
     numbers = ", ".join(f"#{video_id:05d}" for video_id in approved_video_ids)
     return f"<b>Заявки:</b> {numbers}"
+
+
+def build_video_views_milestone_text(views_threshold: int) -> str:
+    """Возвращает текст уведомления по порогу просмотров."""
+
+    milestone_texts = {
+        5000: (
+            "🎉 Ваше видео набрало 5 000 просмотров!\n\n"
+            "Так держать! Ваш контент набирает популярность. Продолжайте в том же "
+            "духе — следующая цель 20 000 просмотров 🚀"
+        ),
+        20000: (
+            "🔥 Уже 20 000 просмотров!\n\n"
+            "Ваше видео набирает обороты — 20 000 просмотров это серьёзно! "
+            "Вы отлично справляетесь. До следующей отметки 50 000 осталось совсем немного 💪"
+        ),
+        50000: (
+            "⭐ Ваше видео посмотрели 50 000 раз!\n\n"
+            "Это уже большой результат! 50 000 просмотров — ваш контент находит свою аудиторию. "
+            "Ещё немного, и вы достигнете 100 000. Там вас ждёт вознаграждение 🎁"
+        ),
+        100000: (
+            "🏆 100 000 просмотров — вы это сделали!\n\n"
+            "Поздравляем! Ваше видео набрало 100 000 просмотров. Это отличный результат, "
+            "которого достигают немногие. Мы выплачиваем вознаграждение за эту отметку — "
+            "с вами скоро свяжется наш менеджер для уточнения реквизитов 💰"
+        ),
+    }
+    return milestone_texts[views_threshold]

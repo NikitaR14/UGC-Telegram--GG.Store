@@ -156,6 +156,21 @@ def get_return_to_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def get_return_to_my_videos_keyboard() -> InlineKeyboardMarkup:
+    """Возвращает кнопку перехода в раздел с видео пользователя."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Мои видео",
+                    callback_data="menu:my_videos",
+                ),
+            ],
+        ],
+    )
+
+
 def get_my_videos_keyboard(
     page: int,
     total_pages: int,

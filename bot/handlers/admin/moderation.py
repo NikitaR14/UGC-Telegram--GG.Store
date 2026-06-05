@@ -17,6 +17,7 @@ from loguru import logger
 from bot.config import get_settings
 from bot.db import BotRepository, User, Video, VideoStatus, get_session_factory
 from bot.keyboards.admin_kb import (
+    get_admin_all_videos_list_keyboard,
     get_admin_dashboard_keyboard,
     get_admin_detail_keyboard,
     get_admin_list_keyboard,
@@ -52,6 +53,7 @@ SECTION_TITLES = {
     VideoStatus.APPROVED.value: f"{SUCCESS_TEXT} <b>Одобренные заявки</b>",
     VideoStatus.PAID.value: f"{PAYMENTS_TEXT} <b>Оплаченные заявки</b>",
     VideoStatus.REJECTED.value: f"{ERROR_TEXT} <b>Отклонённые заявки</b>",
+    "all": f"{LIST_TEXT} <b>Все видео</b>",
 }
 PENDING_STATUS = "pending"
 APPROVED_STATUS = "approved"
@@ -130,7 +132,27 @@ async def show_admin_status_list(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
+    if status == "all":
+        await render_admin_all_videos_page(callback, page=1)
+        return
     await render_admin_list_page(callback, status=status, page=1)
+
+
+@router.callback_query(F.data.startswith("admin:all_videos:"))
+async def paginate_admin_all_videos(callback: CallbackQuery) -> None:
+    """Переключает страницы общего списка видео пользователей."""
+
+    if not await is_valid_admin_callback(callback):
+        return
+    if callback.data == "admin:all_videos:noop":
+        await callback.answer()
+        return
+
+    await callback.answer()
+    await render_admin_all_videos_page(
+        callback,
+        page=parse_all_videos_page(callback.data),
+    )
 
 
 @router.callback_query(F.data.startswith("admin:list:"))
@@ -583,6 +605,26 @@ async def render_admin_list_page(
     )
 
 
+async def render_admin_all_videos_page(
+    callback: CallbackQuery,
+    page: int,
+) -> None:
+    """Рендерит отдельный раздел со всеми видео пользователей."""
+
+    repository = BotRepository(get_session_factory())
+    result = await repository.get_all_videos_page(page=page)
+    text = build_admin_all_videos_text(result.items)
+    await safe_edit_admin_text(
+        callback,
+        text,
+        get_admin_all_videos_list_keyboard(
+            page=result.page,
+            total_pages=result.total_pages,
+            has_items=bool(result.items),
+        ),
+    )
+
+
 async def render_admin_detail_page(
     callback: CallbackQuery,
     list_status: str,
@@ -678,6 +720,33 @@ def build_admin_list_items(videos: list[Video]) -> list[tuple[int, str]]:
     return items
 
 
+def build_admin_all_videos_text(videos: list[Video]) -> str:
+    """Формирует текст истории всех видео для админской панели."""
+
+    title = SECTION_TITLES["all"]
+    if not videos:
+        return f"{title}\n\nВ этом разделе пока нет видео."
+    cards = [format_admin_all_video_card(video) for video in videos]
+    return f"{title}\n\n" + "\n\n".join(cards)
+
+
+def format_admin_all_video_card(video: Video) -> str:
+    """Формирует карточку видео для общего админского списка."""
+
+    username = "без username"
+    if video.user is not None and video.user.username:
+        username = f"@{video.user.username}"
+    platform = PLATFORM_LABELS.get(video.platform, video.platform)
+    title = shorten_video_title(video.title or video.url)
+    return (
+        f"<b>Пользователь:</b> {username}\n"
+        f"<b>Название:</b> <a href=\"{video.url}\">{title}</a>\n"
+        f"<b>Платформа:</b> {platform}\n"
+        f"<b>Дата добавления:</b> {format_datetime(video.created_at)}\n"
+        f"<b>Просмотры:</b> {format_views_count(video.views_count)}"
+    )
+
+
 def build_admin_detail_text(video: Video) -> str:
     """Формирует подробную карточку заявки для админ-панели."""
 
@@ -695,6 +764,7 @@ def build_admin_detail_text(video: Video) -> str:
         f"<b>Видео:</b> <a href=\"{video.url}\">{shorten_video_title(video.title or video.url)}</a>\n"
         f"<b>Платформа:</b> {platform}\n"
         f"<b>Дата:</b> {format_datetime(video.created_at)}\n"
+        f"<b>Просмотры:</b> {format_views_count(video.views_count)}\n"
         f"<b>Статус:</b> {status}\n"
         f"<b>Сумма выплаты:</b> {int(video.payout_amount)} ₽\n"
         f"<b>Способ вывода:</b> {payment_method}\n"
@@ -753,6 +823,20 @@ def parse_admin_list_callback(callback_data: str | None) -> tuple[str | None, in
     except ValueError:
         return status, 1
     return status, page
+
+
+def parse_all_videos_page(callback_data: str | None) -> int:
+    """Извлекает номер страницы из callback общего списка видео."""
+
+    if not callback_data:
+        return 1
+    parts = callback_data.split(":")
+    if len(parts) != 3:
+        return 1
+    try:
+        return max(int(parts[2]), 1)
+    except ValueError:
+        return 1
 
 
 def parse_admin_view_callback(
@@ -941,3 +1025,9 @@ def format_datetime(value: datetime) -> str:
     """Форматирует дату заявки для админского сообщения."""
 
     return value.strftime("%d.%m.%Y %H:%M")
+
+
+def format_views_count(value: int) -> str:
+    """Форматирует число просмотров для интерфейса администратора."""
+
+    return f"{max(value, 0):,}".replace(",", " ")

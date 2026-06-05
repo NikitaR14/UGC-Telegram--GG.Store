@@ -69,6 +69,15 @@ def test_build_applications_line_formats_one_and_many_ids() -> None:
     assert notification_service.build_applications_line([12, 15]) == "<b>Заявки:</b> #00012, #00015"
 
 
+def test_build_video_views_milestone_text_returns_expected_copy() -> None:
+    """Проверяет тексты уведомлений по порогам просмотров."""
+
+    assert "5 000 просмотров" in notification_service.build_video_views_milestone_text(5000)
+    assert "20 000 просмотров" in notification_service.build_video_views_milestone_text(20000)
+    assert "50 000" in notification_service.build_video_views_milestone_text(50000)
+    assert "100 000 просмотров" in notification_service.build_video_views_milestone_text(100000)
+
+
 @pytest.mark.asyncio
 async def test_notify_video_approved_with_payment_details_sends_masked_account() -> None:
     """Проверяет текст одобрения при наличии реквизитов пользователя."""
@@ -127,6 +136,18 @@ async def test_notify_video_paid_mentions_amount() -> None:
     text = str(bot.messages[0]["text"])
     assert "Выплата отправлена" in text
     assert "1500 ₽" in text
+
+
+@pytest.mark.asyncio
+async def test_notify_video_views_milestone_adds_button_to_my_videos() -> None:
+    """Проверяет кнопку перехода в раздел с видео у порогового уведомления."""
+
+    bot = DummyBot()
+    user = build_user()
+
+    await notification_service.notify_video_views_milestone(bot, user, 5000)
+
+    assert bot.messages[0]["reply_markup"] is not None
 
 
 @pytest.mark.asyncio

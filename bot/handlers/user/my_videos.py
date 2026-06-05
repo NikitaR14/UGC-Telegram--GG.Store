@@ -72,6 +72,7 @@ async def render_videos_page(callback: CallbackQuery, page: int) -> None:
         return
 
     repository = BotRepository(get_session_factory())
+    total_videos = await repository.count_user_videos(callback.from_user.id)
     result = await repository.get_user_videos_page(
         user_id=callback.from_user.id,
         page=page,
@@ -79,7 +80,7 @@ async def render_videos_page(callback: CallbackQuery, page: int) -> None:
     if not result.items:
         await safe_edit_text(
             callback=callback,
-            text=NO_VIDEOS_TEXT,
+            text=build_empty_videos_text(total_videos),
             reply_markup=get_my_videos_keyboard(
                 page=1,
                 total_pages=1,
@@ -88,7 +89,7 @@ async def render_videos_page(callback: CallbackQuery, page: int) -> None:
         )
         return
 
-    text = build_videos_text(result.items)
+    text = build_videos_text(result.items, total_videos)
     await safe_edit_text(
         callback=callback,
         text=text,
@@ -100,11 +101,25 @@ async def render_videos_page(callback: CallbackQuery, page: int) -> None:
     )
 
 
-def build_videos_text(videos: list[Video]) -> str:
+def build_videos_text(videos: list[Video], total_videos: int) -> str:
     """Формирует текст списка заявок пользователя."""
 
     cards = [format_video_card(video) for video in videos]
-    return f"{CLIPS_TEXT} <b>Мои видео</b>\n\n" + "\n\n".join(cards)
+    return (
+        f"{CLIPS_TEXT} <b>Мои видео</b>\n\n"
+        f"<b>Загружено видео:</b> {total_videos}\n\n"
+        + "\n\n".join(cards)
+    )
+
+
+def build_empty_videos_text(total_videos: int) -> str:
+    """Формирует пустой экран раздела с числом загруженных роликов."""
+
+    return (
+        f"{CLIPS_TEXT} <b>Мои видео</b>\n\n"
+        f"<b>Загружено видео:</b> {total_videos}\n\n"
+        "У вас пока нет отправленных заявок."
+    )
 
 
 def format_video_card(video: Video) -> str:
@@ -118,6 +133,7 @@ def format_video_card(video: Video) -> str:
         f"<b>Название:</b> <a href=\"{video.url}\">{title}</a>",
         f"<b>Платформа:</b> {platform}",
         f"<b>Дата добавления:</b> {date_label}",
+        f"<b>Просмотры:</b> {format_views_count(video.views_count)}",
         f"<b>Статус:</b> {status}",
         f"<b>Сумма выплаты:</b> {int(video.payout_amount)} ₽",
     ]
@@ -137,6 +153,12 @@ def shorten_title(value: str) -> str:
     """Ограничивает длину названия для компактного отображения."""
 
     return shorten_video_title(value)
+
+
+def format_views_count(value: int) -> str:
+    """Форматирует число просмотров с пробелами между разрядами."""
+
+    return f"{max(value, 0):,}".replace(",", " ")
 
 
 def parse_page_number(callback_data: str | None) -> int:

@@ -11,6 +11,7 @@ PAYOUT_RATE = 250
 MIN_WITHDRAWAL = 300
 WITHDRAWAL_DAYS = 3
 DETAILS_TAIL_LENGTH = 4
+DEFAULT_LAST_NOTIFIED_THRESHOLD = 0
 
 
 class Base(DeclarativeBase):
@@ -83,7 +84,23 @@ class Video(Base):
         server_default="0",
         nullable=False,
     )
+    views_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    last_notified_threshold: Mapped[int] = mapped_column(
+        Integer,
+        default=DEFAULT_LAST_NOTIFIED_THRESHOLD,
+        server_default=str(DEFAULT_LAST_NOTIFIED_THRESHOLD),
+        nullable=False,
+    )
     reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    views_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

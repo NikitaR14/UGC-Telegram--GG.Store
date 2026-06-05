@@ -13,6 +13,7 @@ from bot.handlers.admin.moderation import (
     APPROVE_SUCCESS_TEXT,
     APPROVE_WAITING_DETAILS_NOTICE_TEXT,
     APPROVE_WAITING_DETAILS_TEXT,
+    build_admin_all_videos_text,
     build_admin_detail_text,
     build_admin_list_items,
     build_admin_payment_details,
@@ -58,6 +59,7 @@ def build_video(**overrides) -> SimpleNamespace:
         "title": "Очень длинное тестовое название ролика для проверки",
         "status": PENDING_STATUS,
         "payout_amount": 1500.0,
+        "views_count": 12345,
         "reject_reason": None,
         "created_at": datetime(2026, 5, 4, 12, 30, 0),
         "user": build_user(),
@@ -78,6 +80,7 @@ def test_parse_admin_callbacks_extract_context() -> None:
     """Проверяет разбор callback-данных для разделов и деталей админки."""
 
     assert parse_status_from_menu("admin:menu:pending") == PENDING_STATUS
+    assert parse_status_from_menu("admin:menu:all") == "all"
     assert parse_status_from_menu("admin:menu:unknown") is None
     assert parse_admin_list_callback("admin:list:approved:3") == (APPROVED_STATUS, 3)
     assert parse_admin_view_callback("admin:view:rejected:2:44") == (REJECTED_STATUS, 2, 44)
@@ -154,7 +157,18 @@ def test_build_admin_detail_text_contains_payment_details_and_reason() -> None:
 
     assert "Банковская карта" in text
     assert "<code>5555444433332222</code>" in text
+    assert "12 345" in text
     assert "<blockquote>Не соответствует требованиям</blockquote>" in text
+
+
+def test_build_admin_all_videos_text_includes_user_and_views() -> None:
+    """Проверяет формат раздела со всеми видео пользователей."""
+
+    text = build_admin_all_videos_text([build_video()])
+
+    assert "Все видео" in text
+    assert "@moderated_user" in text
+    assert "12 345" in text
 
 
 def test_build_admin_detail_text_shows_waiting_note_without_payment_details() -> None:

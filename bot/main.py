@@ -18,6 +18,7 @@ from bot.config import get_settings
 from bot.db import close_database, init_database
 from bot.handlers import get_routers
 from bot.services.telegram_safe import safe_delete_my_commands, safe_set_my_commands
+from bot.services.video_monitor import run_video_views_monitor
 
 
 def configure_logger() -> None:
@@ -97,6 +98,7 @@ async def main() -> None:
     )
     dispatcher = build_dispatcher()
     asyncio.create_task(setup_bot_commands_background(bot))
+    asyncio.create_task(run_video_views_monitor(bot))
 
     logger.info("Bot process initialized")
     try:
