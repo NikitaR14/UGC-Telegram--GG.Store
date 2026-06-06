@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib.util import find_spec
 import re
 from html import unescape
 from pathlib import Path
@@ -89,8 +90,24 @@ def get_video_cookies_file() -> str | None:
     return str(path)
 
 
-def build_ytdlp_options() -> dict[str, object]:
-    """Собирает базовые опции yt-dlp с опциональным proxy и cookies."""
+def get_video_impersonate_target(platform: str | None = None) -> str | None:
+    """Возвращает цель impersonation для `yt-dlp`, если она доступна."""
+
+    configured_target = _normalize_optional(get_settings().video_impersonate_target)
+    if configured_target:
+        return configured_target
+
+    if platform != "tiktok":
+        return None
+
+    if find_spec("curl_cffi") is None:
+        return None
+
+    return "chrome"
+
+
+def build_ytdlp_options(platform: str | None = None) -> dict[str, object]:
+    """Собирает базовые опции yt-dlp с proxy, cookies и impersonation."""
 
     options: dict[str, object] = {
         "quiet": True,
@@ -105,6 +122,9 @@ def build_ytdlp_options() -> dict[str, object]:
     cookies_file = get_video_cookies_file()
     if cookies_file:
         options["cookiefile"] = cookies_file
+    impersonate_target = get_video_impersonate_target(platform)
+    if impersonate_target:
+        options["impersonate"] = impersonate_target
     return options
 
 
@@ -308,7 +328,7 @@ def extract_ytdlp_title(url: str) -> str | None:
     if YoutubeDL is None:
         return None
 
-    options = build_ytdlp_options()
+    options = build_ytdlp_options(detect_platform(url))
     with YoutubeDL(options) as ydl:
         payload = ydl.extract_info(url, download=False)
     if not isinstance(payload, dict):
@@ -325,7 +345,7 @@ def extract_ytdlp_views(url: str) -> int | None:
     if YoutubeDL is None:
         return None
 
-    options = build_ytdlp_options()
+    options = build_ytdlp_options(detect_platform(url))
     with YoutubeDL(options) as ydl:
         payload = ydl.extract_info(url, download=False)
     if not isinstance(payload, dict):

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=None,
         alias="VIDEO_COOKIES_FILE",
     )
+    video_impersonate_target: str | None = Field(
+        default=None,
+        alias="VIDEO_IMPERSONATE_TARGET",
+    )
     yandex_metrika_counter_id: str | None = Field(
         default=None,
         alias="YANDEX_METRIKA_COUNTER_ID",

@@ -203,6 +203,54 @@ def test_build_ytdlp_options_ignores_missing_cookiefile(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_build_ytdlp_options_adds_impersonation_for_tiktok_from_env(monkeypatch) -> None:
+    """Проверяет явный проброс impersonation-цели для TikTok."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("VIDEO_IMPERSONATE_TARGET", "chrome124")
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options("tiktok")
+
+    assert options["impersonate"] == "chrome124"
+    get_settings.cache_clear()
+
+
+def test_build_ytdlp_options_adds_default_impersonation_for_tiktok(
+    monkeypatch,
+) -> None:
+    """Проверяет дефолтный impersonation для TikTok при доступном curl-cffi."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.delenv("VIDEO_IMPERSONATE_TARGET", raising=False)
+    monkeypatch.setattr(video_service, "find_spec", lambda name: object())
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options("tiktok")
+
+    assert options["impersonate"] == "chrome"
+    get_settings.cache_clear()
+
+
+def test_build_ytdlp_options_skips_default_impersonation_without_curl_cffi(
+    monkeypatch,
+) -> None:
+    """Проверяет, что без curl-cffi дефолтный impersonation не включается."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.delenv("VIDEO_IMPERSONATE_TARGET", raising=False)
+    monkeypatch.setattr(video_service, "find_spec", lambda name: None)
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options("tiktok")
+
+    assert "impersonate" not in options
+    get_settings.cache_clear()
+
+
 def test_is_expected_video_views_error_detects_known_noisy_cases() -> None:
     """Проверяет распознавание ожидаемых ошибок недоступных видео."""
 
