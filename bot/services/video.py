@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from html import unescape
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
@@ -25,6 +26,11 @@ TITLE_PATTERNS = (
     re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)'),
     re.compile(r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)'),
     re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL),
+)
+TIKTOK_VIEWS_PATTERNS = (
+    re.compile(r'"playCount"\s*:\s*"?(?P<value>\d+)"?'),
+    re.compile(r'"play_count"\s*:\s*"?(?P<value>\d+)"?'),
+    re.compile(r'"viewCount"\s*:\s*"?(?P<value>\d+)"?'),
 )
 TITLE_CLEANUP_SUFFIXES = (
     " - YouTube",
@@ -70,8 +76,21 @@ def get_video_proxy_url() -> str | None:
     return _normalize_optional(get_settings().video_proxy_url)
 
 
+def get_video_cookies_file() -> str | None:
+    """Возвращает путь к cookies-файлу для `yt-dlp`, если он настроен."""
+
+    cookies_file = _normalize_optional(get_settings().video_cookies_file)
+    if not cookies_file:
+        return None
+
+    path = Path(cookies_file).expanduser()
+    if not path.is_file():
+        return None
+    return str(path)
+
+
 def build_ytdlp_options() -> dict[str, object]:
-    """Собирает базовые опции yt-dlp с опциональным proxy."""
+    """Собирает базовые опции yt-dlp с опциональным proxy и cookies."""
 
     options: dict[str, object] = {
         "quiet": True,
@@ -83,6 +102,9 @@ def build_ytdlp_options() -> dict[str, object]:
     proxy_url = get_video_proxy_url()
     if proxy_url:
         options["proxy"] = proxy_url
+    cookies_file = get_video_cookies_file()
+    if cookies_file:
+        options["cookiefile"] = cookies_file
     return options
 
 
@@ -216,20 +238,36 @@ async def fetch_ytdlp_title(url: str) -> str | None:
 async def fetch_video_views(url: str) -> int | None:
     """Пытается получить число просмотров ролика."""
 
-    if YoutubeDL is None:
+    normalized_url = normalize_video_url(url)
+    platform = detect_platform(normalized_url)
+
+    if YoutubeDL is not None:
+        try:
+            resolved_views = await asyncio.wait_for(
+                asyncio.to_thread(extract_ytdlp_views, normalized_url),
+                timeout=VIEWS_RESOLUTION_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("Video views resolution timed out | url={}", normalized_url)
+            resolved_views = None
+        except Exception as error:
+            log_video_views_error(normalized_url, str(error))
+            resolved_views = None
+        else:
+            if resolved_views is not None:
+                return resolved_views
+
+    if platform != "tiktok":
         return None
 
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(extract_ytdlp_views, normalize_video_url(url)),
-            timeout=VIEWS_RESOLUTION_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        logger.warning("Video views resolution timed out | url={}", url)
+    html = await fetch_video_page(normalized_url)
+    if not html:
         return None
-    except Exception as error:
-        log_video_views_error(url, str(error))
-        return None
+
+    parsed_views = extract_tiktok_views_from_html(html)
+    if parsed_views is not None:
+        logger.info("TikTok views extracted from HTML fallback | url={}", normalized_url)
+    return parsed_views
 
 
 def is_expected_video_views_error(error_text: str) -> bool:
@@ -296,6 +334,20 @@ def extract_ytdlp_views(url: str) -> int | None:
     if not isinstance(view_count, int):
         return None
     return max(view_count, 0)
+
+
+def extract_tiktok_views_from_html(html: str) -> int | None:
+    """Пытается извлечь число просмотров TikTok из HTML страницы."""
+
+    for pattern in TIKTOK_VIEWS_PATTERNS:
+        match = pattern.search(html)
+        if not match:
+            continue
+        try:
+            return max(int(match.group("value")), 0)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 async def fetch_oembed_title(url: str, platform: str) -> str | None:

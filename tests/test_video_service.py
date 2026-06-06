@@ -73,6 +73,18 @@ def test_extract_title_from_html_prefers_first_matching_pattern() -> None:
     assert video_service.extract_title_from_html(html) == "Тестовый ролик"
 
 
+def test_extract_tiktok_views_from_html_reads_play_count() -> None:
+    """Проверяет извлечение просмотров TikTok из HTML fallback."""
+
+    html = """
+    <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">
+      {"__DEFAULT_SCOPE__":{"webapp.video-detail":{"itemInfo":{"itemStruct":{"stats":{"playCount":"123456"}}}}}}
+    </script>
+    """
+
+    assert video_service.extract_tiktok_views_from_html(html) == 123456
+
+
 @pytest.mark.asyncio
 async def test_resolve_video_title_returns_ytdlp_title_first(monkeypatch) -> None:
     """Проверяет приоритет yt-dlp над другими источниками названия."""
@@ -157,6 +169,40 @@ def test_build_ytdlp_options_adds_proxy_from_env(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
+def test_build_ytdlp_options_adds_cookiefile_when_file_exists(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Проверяет проброс cookies-файла в yt-dlp при наличии файла."""
+
+    cookies_file = tmp_path / "tiktok-cookies.txt"
+    cookies_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("VIDEO_COOKIES_FILE", str(cookies_file))
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options()
+
+    assert options["cookiefile"] == str(cookies_file)
+    get_settings.cache_clear()
+
+
+def test_build_ytdlp_options_ignores_missing_cookiefile(monkeypatch) -> None:
+    """Проверяет игнорирование несуществующего cookies-файла."""
+
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_PASSWORD", "password")
+    monkeypatch.setenv("VIDEO_COOKIES_FILE", "/tmp/definitely-missing-cookies.txt")
+    get_settings.cache_clear()
+
+    options = video_service.build_ytdlp_options()
+
+    assert "cookiefile" not in options
+    get_settings.cache_clear()
+
+
 def test_is_expected_video_views_error_detects_known_noisy_cases() -> None:
     """Проверяет распознавание ожидаемых ошибок недоступных видео."""
 
@@ -225,3 +271,21 @@ async def test_fetch_oembed_title_passes_proxy_to_request(monkeypatch) -> None:
     assert title == "Тестовый ролик"
     assert captured_kwargs["proxy"] == "socks5://127.0.0.1:1080"
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_fetch_video_views_uses_tiktok_html_fallback(monkeypatch) -> None:
+    """Проверяет fallback к HTML, если yt-dlp не смог получить просмотры TikTok."""
+
+    async def fake_html(url: str) -> str:
+        return '{"stats":{"playCount":"987654"}}'
+
+    monkeypatch.setattr(video_service, "YoutubeDL", object())
+    monkeypatch.setattr(video_service, "extract_ytdlp_views", lambda url: None)
+    monkeypatch.setattr(video_service, "fetch_video_page", fake_html)
+
+    views = await video_service.fetch_video_views(
+        "https://www.tiktok.com/@user/video/7647872771137031457?is_from_webapp=1",
+    )
+
+    assert views == 987654
