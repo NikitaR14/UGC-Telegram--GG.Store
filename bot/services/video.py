@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from html import unescape
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from loguru import logger
@@ -46,6 +46,12 @@ EXPECTED_VIDEO_VIEWS_ERROR_MARKERS = (
     "photo/",
     "Private video",
     "This video is unavailable",
+    "Unexpected response from webpage request",
+)
+EXPECTED_VIDEO_TITLE_ERROR_MARKERS = (
+    "Your IP address is blocked",
+    "Unexpected response from webpage request",
+    "Unsupported URL",
 )
 
 
@@ -80,10 +86,48 @@ def build_ytdlp_options() -> dict[str, object]:
     return options
 
 
+def normalize_video_url(url: str) -> str:
+    """Нормализует ссылку на видео и убирает лишний мусор из сообщения."""
+
+    raw_url = url.strip()
+    if not raw_url:
+        return ""
+
+    candidate = raw_url.split()[0].strip()
+    parsed_url = urlparse(candidate)
+    hostname = (parsed_url.netloc or "").lower()
+
+    if TIKTOK_HOST_PART in hostname:
+        return urlunparse(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                parsed_url.path.rstrip("/"),
+                "",
+                "",
+                "",
+            ),
+        )
+
+    if YOUTUBE_HOST_PART in hostname or hostname == YOUTU_BE_HOST:
+        return urlunparse(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                parsed_url.path.rstrip("/"),
+                "",
+                parsed_url.query if SHORTS_PATH_PART not in parsed_url.path.lower() else "",
+                "",
+            ),
+        )
+
+    return candidate
+
+
 def detect_platform(url: str) -> str | None:
     """Определяет поддерживаемую платформу по ссылке."""
 
-    normalized_url = url.strip()
+    normalized_url = normalize_video_url(url)
     parsed_url = urlparse(normalized_url)
     hostname = (parsed_url.netloc or "").lower()
     path = parsed_url.path.lower()
@@ -100,7 +144,7 @@ def detect_platform(url: str) -> str | None:
 def build_video_title(url: str, platform: str) -> str:
     """Строит безопасный заголовок для отображения в истории."""
 
-    parsed_url = urlparse(url.strip())
+    parsed_url = urlparse(normalize_video_url(url))
     hostname = parsed_url.netloc or platform
     path = parsed_url.path.strip("/")
     preview = path[:TITLE_PREVIEW_LENGTH]
@@ -123,21 +167,23 @@ def shorten_video_title(value: str, limit: int = TITLE_DISPLAY_LENGTH) -> str:
 async def resolve_video_title(url: str, platform: str) -> str:
     """Пытается получить реальное название видео, иначе возвращает fallback."""
 
-    ytdlp_title = await fetch_ytdlp_title(url)
+    normalized_url = normalize_video_url(url)
+
+    ytdlp_title = await fetch_ytdlp_title(normalized_url)
     if ytdlp_title:
         return ytdlp_title
 
-    oembed_title = await fetch_oembed_title(url, platform)
+    oembed_title = await fetch_oembed_title(normalized_url, platform)
     if oembed_title:
         return oembed_title
 
-    html = await fetch_video_page(url)
+    html = await fetch_video_page(normalized_url)
     if not html:
-        return build_video_title(url, platform)
+        return build_video_title(normalized_url, platform)
 
     title = extract_title_from_html(html)
     if not title:
-        return build_video_title(url, platform)
+        return build_video_title(normalized_url, platform)
     return title
 
 
@@ -161,9 +207,9 @@ async def fetch_ytdlp_title(url: str) -> str | None:
         return None
 
     try:
-        return await asyncio.to_thread(extract_ytdlp_title, url)
+        return await asyncio.to_thread(extract_ytdlp_title, normalize_video_url(url))
     except Exception as error:
-        logger.warning("yt-dlp title extraction failed | url={} error={}", url, str(error))
+        log_video_title_error(url, str(error))
         return None
 
 
@@ -175,7 +221,7 @@ async def fetch_video_views(url: str) -> int | None:
 
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(extract_ytdlp_views, url),
+            asyncio.to_thread(extract_ytdlp_views, normalize_video_url(url)),
             timeout=VIEWS_RESOLUTION_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -193,6 +239,13 @@ def is_expected_video_views_error(error_text: str) -> bool:
     return any(marker in normalized_error for marker in EXPECTED_VIDEO_VIEWS_ERROR_MARKERS)
 
 
+def is_expected_video_title_error(error_text: str) -> bool:
+    """Определяет ожидаемые ошибки для получения заголовка TikTok/YouTube."""
+
+    normalized_error = error_text.strip()
+    return any(marker in normalized_error for marker in EXPECTED_VIDEO_TITLE_ERROR_MARKERS)
+
+
 def log_video_views_error(url: str, error_text: str) -> None:
     """Логирует сбой получения просмотров с понижением шума для ожидаемых кейсов."""
 
@@ -200,6 +253,15 @@ def log_video_views_error(url: str, error_text: str) -> None:
         logger.info("Video views skipped | url={} reason={}", url, error_text)
         return
     logger.warning("Video views extraction failed | url={} error={}", url, error_text)
+
+
+def log_video_title_error(url: str, error_text: str) -> None:
+    """Логирует сбой получения названия видео с понижением шума для ожидаемых кейсов."""
+
+    if is_expected_video_title_error(error_text):
+        logger.info("Video title skipped | url={} reason={}", url, error_text)
+        return
+    logger.warning("yt-dlp title extraction failed | url={} error={}", url, error_text)
 
 
 def extract_ytdlp_title(url: str) -> str | None:
@@ -251,7 +313,8 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
     }
-    params = {"url": url, "format": "json"}
+    normalized_url = normalize_video_url(url)
+    params = {"url": normalized_url, "format": "json"}
     proxy_url = get_video_proxy_url()
     request_kwargs = {
         "params": params,
@@ -267,7 +330,7 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
                     logger.warning(
                         "oEmbed request failed | platform={} url={} status={}",
                         platform,
-                        url,
+                        normalized_url,
                         response.status,
                     )
                     return None
@@ -276,7 +339,7 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
         logger.warning(
             "oEmbed request failed | platform={} url={} error={}",
             platform,
-            url,
+            normalized_url,
             str(error),
         )
         return None
@@ -284,7 +347,7 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
         logger.warning(
             "oEmbed timeout | platform={} url={} error={}",
             platform,
-            url,
+            normalized_url,
             str(error),
         )
         return None
@@ -292,7 +355,7 @@ async def fetch_oembed_title(url: str, platform: str) -> str | None:
         logger.warning(
             "oEmbed parse failed | platform={} url={} error={}",
             platform,
-            url,
+            normalized_url,
             str(error),
         )
         return None
@@ -314,26 +377,27 @@ async def fetch_video_page(url: str) -> str | None:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
     }
+    normalized_url = normalize_video_url(url)
     proxy_url = get_video_proxy_url()
     request_kwargs = {"allow_redirects": True}
     if proxy_url:
         request_kwargs["proxy"] = proxy_url
     try:
         async with ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, **request_kwargs) as response:
+            async with session.get(normalized_url, **request_kwargs) as response:
                 if response.status >= 400:
                     logger.warning(
                         "Video page request failed | url={} status={}",
-                        url,
+                        normalized_url,
                         response.status,
                     )
                     return None
                 return await response.text()
     except ClientError as error:
-        logger.warning("Video page request failed | url={} error={}", url, str(error))
+        logger.warning("Video page request failed | url={} error={}", normalized_url, str(error))
         return None
     except TimeoutError as error:
-        logger.warning("Video page timeout | url={} error={}", url, str(error))
+        logger.warning("Video page timeout | url={} error={}", normalized_url, str(error))
         return None
 
 
@@ -378,7 +442,7 @@ def is_fallback_title(title: str | None, url: str, platform: str) -> bool:
     if not title:
         return True
     normalized_title = title.strip()
-    normalized_url = url.strip()
+    normalized_url = normalize_video_url(url)
     fallback_title = build_video_title(url, platform)
     return (
         normalized_title == fallback_title

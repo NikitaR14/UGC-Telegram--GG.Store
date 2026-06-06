@@ -18,6 +18,26 @@ def test_detect_platform_supports_tiktok_and_youtube_shorts() -> None:
     assert video_service.detect_platform("https://example.com/video") is None
 
 
+def test_normalize_video_url_cleans_tiktok_tracking_tail() -> None:
+    """Проверяет очистку TikTok-ссылки от query, fragment и текстового хвоста."""
+
+    normalized = video_service.normalize_video_url(
+        "https://www.tiktok.com/@user/video/7647872771137031457?is_from_webapp=1&sender_device=pc#frag #GGStoreUGCclips",
+    )
+
+    assert normalized == "https://www.tiktok.com/@user/video/7647872771137031457"
+
+
+def test_normalize_video_url_keeps_short_youtube_query() -> None:
+    """Проверяет сохранение query у коротких YouTube-ссылок."""
+
+    normalized = video_service.normalize_video_url(
+        "https://youtu.be/abc123?si=test123 #GGStoreUGCclips",
+    )
+
+    assert normalized == "https://youtu.be/abc123?si=test123"
+
+
 def test_build_video_title_shortens_long_path() -> None:
     """Проверяет безопасный fallback-заголовок из URL."""
 
@@ -146,6 +166,16 @@ def test_is_expected_video_views_error_detects_known_noisy_cases() -> None:
         "ERROR: This user's account is likely either private or all of their videos are private",
     )
     assert video_service.is_expected_video_views_error("Some brand new unknown error") is False
+
+
+def test_is_expected_video_title_error_detects_known_noisy_cases() -> None:
+    """Проверяет распознавание ожидаемых ошибок получения названия."""
+
+    assert video_service.is_expected_video_title_error("ERROR: Your IP address is blocked")
+    assert video_service.is_expected_video_title_error(
+        "ERROR: Unexpected response from webpage request",
+    )
+    assert video_service.is_expected_video_title_error("Unexpected brand new title error") is False
 
 
 @pytest.mark.asyncio

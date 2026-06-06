@@ -18,7 +18,13 @@ from bot.keyboards.user_kb import (
 )
 from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
-from bot.services.video import is_fallback_title, detect_platform, resolve_video_title, resolve_video_title_quickly
+from bot.services.video import (
+    detect_platform,
+    is_fallback_title,
+    normalize_video_url,
+    resolve_video_title,
+    resolve_video_title_quickly,
+)
 from bot.services.video_monitor import refresh_video_views_now
 from bot.ui.emojis import SUCCESS_TEXT, VIDEO_TEXT
 
@@ -90,7 +96,8 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
         )
         return
 
-    platform = detect_platform(message.text)
+    normalized_url = normalize_video_url(message.text)
+    platform = detect_platform(normalized_url)
     if platform is None:
         await safe_message_answer(
             message,
@@ -104,7 +111,7 @@ async def handle_video_url(message: Message, state: FSMContext) -> None:
         user_id=message.from_user.id,
         username=message.from_user.username,
     )
-    url = message.text.strip()
+    url = normalized_url
     title = await resolve_video_title_quickly(url, platform)
     video = await repository.create_video(
         user_id=message.from_user.id,
