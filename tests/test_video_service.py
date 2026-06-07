@@ -389,3 +389,24 @@ async def test_fetch_video_page_uses_curl_fallback_for_tiktok_short_html(
     )
 
     assert html == '{"stats":{"playCount":"123"}}'
+
+
+def test_run_curl_for_html_uses_simple_shell_compatible_command(monkeypatch) -> None:
+    """Проверяет, что TikTok curl-fallback не подменяет UA и близок к ручному curl."""
+
+    captured_command: list[str] = []
+
+    def fake_run(*args, **kwargs):
+        nonlocal captured_command
+        captured_command = list(args[0])
+        return SimpleNamespace(stdout='{"stats":{"playCount":"321"}}')
+
+    monkeypatch.setattr(video_service.subprocess, "run", fake_run)
+
+    html = video_service.run_curl_for_html(
+        "https://www.tiktok.com/@user/video/7647872771137031457",
+    )
+
+    assert html == '{"stats":{"playCount":"321"}}'
+    assert captured_command[:2] == ["curl", "-L"]
+    assert "-A" not in captured_command

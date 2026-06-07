@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import PaymentMethod, VideoStatus
+from bot.db.models import PaymentMethod, User, VideoStatus
 from bot.db.repository import DEFAULT_PAGE_SIZE, BotRepository
 
 
@@ -236,6 +238,39 @@ async def test_get_user_withdrawals_page_returns_expected_pagination(
     assert second_page.page == 2
     assert second_page.total_pages == 2
     assert len(second_page.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_user_recovers_from_race_condition(
+    repository: BotRepository,
+    session_factory,
+    monkeypatch,
+) -> None:
+    """Проверяет, что upsert_user переживает гонку на первом создании пользователя."""
+
+    original_commit = AsyncSession.commit
+    first_failure_triggered = False
+
+    async def flaky_commit(self, *args, **kwargs):
+        nonlocal first_failure_triggered
+        has_target_user = any(
+            isinstance(item, User) and item.user_id == TEST_USER_ID
+            for item in self.new
+        )
+        if has_target_user and not first_failure_triggered:
+            first_failure_triggered = True
+            async with session_factory() as competing_session:
+                competing_session.add(User(user_id=TEST_USER_ID, username="from_race"))
+                await original_commit(competing_session)
+            raise IntegrityError("insert into users", {}, Exception("duplicate user"))
+        return await original_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "commit", flaky_commit)
+
+    user = await repository.upsert_user(TEST_USER_ID, "tester")
+
+    assert user.user_id == TEST_USER_ID
+    assert user.username == "tester"
 
 
 @pytest.mark.asyncio

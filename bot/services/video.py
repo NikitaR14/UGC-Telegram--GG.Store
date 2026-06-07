@@ -529,21 +529,7 @@ async def fetch_tiktok_page_via_curl(url: str) -> str | None:
 def run_curl_for_html(url: str) -> str | None:
     """Синхронно загружает HTML страницы через `curl`."""
 
-    command = [
-        "curl",
-        "-L",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        str(REQUEST_TIMEOUT_SECONDS),
-        "-A",
-        (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        url,
-    ]
+    command = ["curl", "-L", "--max-time", str(REQUEST_TIMEOUT_SECONDS), url]
     proxy_url = get_video_proxy_url()
     if proxy_url:
         command[1:1] = ["--proxy", proxy_url]

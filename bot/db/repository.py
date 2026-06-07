@@ -6,6 +6,7 @@ from math import ceil
 from typing import Optional
 
 from sqlalchemy import Select, desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -45,9 +46,18 @@ class BotRepository:
             if user is None:
                 user = User(user_id=user_id, username=username)
                 session.add(user)
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    user = await session.get(User, user_id)
+                    if user is None:
+                        raise
+                    user.username = username
+                    await session.commit()
             else:
                 user.username = username
-            await session.commit()
+                await session.commit()
             await session.refresh(user)
             return user
 
