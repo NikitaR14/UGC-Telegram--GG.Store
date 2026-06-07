@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from importlib.util import find_spec
 import re
+import shutil
+import subprocess
 from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -59,6 +61,14 @@ EXPECTED_VIDEO_TITLE_ERROR_MARKERS = (
     "Your IP address is blocked",
     "Unexpected response from webpage request",
     "Unsupported URL",
+)
+TIKTOK_HTML_DATA_MARKERS = (
+    "playCount",
+    "viewCount",
+    "play_count",
+    "__UNIVERSAL_DATA_FOR_REHYDRATION__",
+    "SIGI_STATE",
+    "itemStruct",
 )
 
 
@@ -450,6 +460,7 @@ async def fetch_video_page(url: str) -> str | None:
         ),
     }
     normalized_url = normalize_video_url(url)
+    platform = detect_platform(normalized_url)
     proxy_url = get_video_proxy_url()
     request_kwargs = {"allow_redirects": True}
     if proxy_url:
@@ -463,14 +474,93 @@ async def fetch_video_page(url: str) -> str | None:
                         normalized_url,
                         response.status,
                     )
+                    if platform == "tiktok":
+                        return await fetch_tiktok_page_via_curl(normalized_url)
                     return None
-                return await response.text()
+                html = await response.text()
+                if platform == "tiktok" and should_retry_tiktok_page_with_curl(html):
+                    fallback_html = await fetch_tiktok_page_via_curl(normalized_url)
+                    if fallback_html:
+                        return fallback_html
+                return html
     except ClientError as error:
         logger.warning("Video page request failed | url={} error={}", normalized_url, str(error))
+        if platform == "tiktok":
+            return await fetch_tiktok_page_via_curl(normalized_url)
         return None
     except TimeoutError as error:
         logger.warning("Video page timeout | url={} error={}", normalized_url, str(error))
+        if platform == "tiktok":
+            return await fetch_tiktok_page_via_curl(normalized_url)
         return None
+
+
+def should_retry_tiktok_page_with_curl(html: str) -> bool:
+    """Определяет, что `aiohttp` получил защитную TikTok-страницу без данных."""
+
+    if not html:
+        return True
+    if any(marker in html for marker in TIKTOK_HTML_DATA_MARKERS):
+        return False
+    return len(html) < 10_000
+
+
+async def fetch_tiktok_page_via_curl(url: str) -> str | None:
+    """Пытается получить TikTok HTML через системный `curl`."""
+
+    if shutil.which("curl") is None:
+        return None
+
+    try:
+        return await asyncio.to_thread(run_curl_for_html, url)
+    except subprocess.TimeoutExpired:
+        logger.warning("TikTok curl timeout | url={}", url)
+        return None
+    except subprocess.CalledProcessError as error:
+        logger.warning(
+            "TikTok curl failed | url={} returncode={} stderr={}",
+            url,
+            error.returncode,
+            (error.stderr or "").strip(),
+        )
+        return None
+
+
+def run_curl_for_html(url: str) -> str | None:
+    """Синхронно загружает HTML страницы через `curl`."""
+
+    command = [
+        "curl",
+        "-L",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        str(REQUEST_TIMEOUT_SECONDS),
+        "-A",
+        (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        url,
+    ]
+    proxy_url = get_video_proxy_url()
+    if proxy_url:
+        command[1:1] = ["--proxy", proxy_url]
+
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        check=True,
+        timeout=REQUEST_TIMEOUT_SECONDS + 1,
+    )
+    html = completed.stdout
+    if not html:
+        return None
+    return html
 
 
 def extract_title_from_html(html: str) -> str | None:

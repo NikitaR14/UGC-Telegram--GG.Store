@@ -85,6 +85,13 @@ def test_extract_tiktok_views_from_html_reads_play_count() -> None:
     assert video_service.extract_tiktok_views_from_html(html) == 123456
 
 
+def test_should_retry_tiktok_page_with_curl_detects_protective_html() -> None:
+    """Проверяет распознавание защитной короткой TikTok-страницы."""
+
+    assert video_service.should_retry_tiktok_page_with_curl("<html>blocked</html>") is True
+    assert video_service.should_retry_tiktok_page_with_curl('{"stats":{"playCount":"1"}}') is False
+
+
 @pytest.mark.asyncio
 async def test_resolve_video_title_returns_ytdlp_title_first(monkeypatch) -> None:
     """Проверяет приоритет yt-dlp над другими источниками названия."""
@@ -337,3 +344,48 @@ async def test_fetch_video_views_uses_tiktok_html_fallback(monkeypatch) -> None:
     )
 
     assert views == 987654
+
+
+@pytest.mark.asyncio
+async def test_fetch_video_page_uses_curl_fallback_for_tiktok_short_html(
+    monkeypatch,
+) -> None:
+    """Проверяет fallback на `curl` для короткой TikTok-страницы без данных."""
+
+    class FakeResponse:
+        status = 200
+
+        async def text(self) -> str:
+            return "<html>blocked</html>"
+
+    class FakeResponseContext:
+        async def __aenter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def get(self, url: str, **kwargs) -> FakeResponseContext:
+            return FakeResponseContext()
+
+    async def fake_curl(url: str) -> str:
+        return '{"stats":{"playCount":"123"}}'
+
+    monkeypatch.setattr(video_service, "ClientSession", FakeSession)
+    monkeypatch.setattr(video_service, "fetch_tiktok_page_via_curl", fake_curl)
+
+    html = await video_service.fetch_video_page(
+        "https://www.tiktok.com/@user/video/7647872771137031457",
+    )
+
+    assert html == '{"stats":{"playCount":"123"}}'
