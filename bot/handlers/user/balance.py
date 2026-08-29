@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from bot.db import BotRepository, PaymentMethod, VideoStatus, Withdrawal, get_session_factory
+from bot.db import BotRepository, PaymentMethod, Withdrawal, get_session_factory
 from bot.handlers.user.start import WELCOME_TEXT, show_callback_screen
 from bot.keyboards.user_kb import (
     get_balance_keyboard,
@@ -15,7 +15,6 @@ from bot.keyboards.user_kb import (
     get_payment_methods_keyboard,
     get_withdrawals_keyboard,
 )
-from bot.services.notification import notify_admins_about_payment_details
 from bot.services.telegram_safe import safe_callback_answer, safe_message_answer
 from bot.ui.emojis import BALANCE_TEXT, CARD_TEXT, PAYMENTS_TEXT, STAR_TEXT, SUCCESS_TEXT, USDT_TEXT
 
@@ -94,25 +93,14 @@ async def save_payment_details(message: Message, state: FSMContext) -> None:
         return
 
     repository = BotRepository(get_session_factory())
-    existing_user = await repository.upsert_user(
+    await repository.upsert_user(
         user_id=message.from_user.id,
         username=message.from_user.username,
     )
-    had_payment_details_before = bool(
-        existing_user.payment_method and existing_user.payment_details,
-    )
-    user = await repository.save_payment_details(
+    await repository.save_payment_details(
         user_id=message.from_user.id,
         payment_method=payment_method,
         payment_details=message.text.strip(),
-    )
-    approved_count = await repository.count_user_videos_by_status(
-        user_id=message.from_user.id,
-        status=VideoStatus.APPROVED.value,
-    )
-    approved_video_ids = await repository.get_user_video_ids_by_status(
-        user_id=message.from_user.id,
-        status=VideoStatus.APPROVED.value,
     )
     await state.clear()
     await safe_message_answer(message, f"{SUCCESS_TEXT} Счёт успешно сохранён!")
@@ -121,12 +109,6 @@ async def save_payment_details(message: Message, state: FSMContext) -> None:
         await build_balance_text(message.from_user.id),
         reply_markup=get_balance_keyboard(),
     )
-    if approved_count > 0 and not had_payment_details_before:
-        await notify_admins_about_payment_details(
-            bot=message.bot,
-            user=user,
-            approved_video_ids=approved_video_ids,
-        )
 
 
 @router.callback_query(F.data == "balance:history")
@@ -234,14 +216,14 @@ def build_withdrawals_text(withdrawals: list[Withdrawal]) -> str:
     header = f"{PAYMENTS_TEXT} <b>История выплат</b>\n\n"
     footer = (
         "\n\n"
-        "<blockquote>Минимальная сумма вывода — 500 ₽\n"
+        "<blockquote>Минимальная сумма вывода — 300 ₽\n"
         "Срок выплаты — 3 рабочих дня</blockquote>"
     )
     if not withdrawals:
         return (
             header
             + "Пока выплат нет.\n\n"
-            + "<blockquote>Минимальная сумма вывода — 500 ₽\n"
+            + "<blockquote>Минимальная сумма вывода — 300 ₽\n"
             + "Срок выплаты — 3 рабочих дня</blockquote>"
         )
 

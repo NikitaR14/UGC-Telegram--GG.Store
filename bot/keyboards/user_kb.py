@@ -220,6 +220,13 @@ def get_balance_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="Создать заявку на вывод",
+                    icon_custom_emoji_id=PAYMENTS_BUTTON_ICON_ID,
+                    callback_data="withdrawal:create",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="Изменить способ вывода",
                     icon_custom_emoji_id=CARD_BUTTON_ICON_ID,
                     callback_data="balance:change_method",
@@ -281,6 +288,59 @@ def get_payment_methods_keyboard(back_only: bool = False) -> InlineKeyboardMarku
         ],
     )
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def get_withdrawal_selection_keyboard(
+    items: list[tuple[int, str, bool]],
+    page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру множественного выбора роликов."""
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if is_selected else '⬜'} {label}",
+                callback_data=f"withdrawal:toggle:{video_id}:{page}",
+            ),
+        ]
+        for video_id, label, is_selected in items
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=f"withdrawal:page:{max(page - 1, 1)}",
+            ),
+            InlineKeyboardButton(
+                text=f"{page}/{total_pages}",
+                callback_data="withdrawal:noop",
+            ),
+            InlineKeyboardButton(
+                text="Вперёд",
+                callback_data=f"withdrawal:page:{min(page + 1, total_pages)}",
+            ),
+        ],
+    )
+    rows.append(
+        [InlineKeyboardButton(text="Продолжить", callback_data="withdrawal:review")],
+    )
+    rows.append(
+        [InlineKeyboardButton(text="К балансу", callback_data="withdrawal:cancel")],
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_withdrawal_confirmation_keyboard() -> InlineKeyboardMarkup:
+    """Возвращает кнопки финального подтверждения заявки."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Отправить заявку", callback_data="withdrawal:submit")],
+            [InlineKeyboardButton(text="Изменить выбор", callback_data="withdrawal:page:1")],
+            [InlineKeyboardButton(text="Отменить", callback_data="withdrawal:cancel")],
+        ],
+    )
 
 
 def get_withdrawals_keyboard(
