@@ -21,6 +21,7 @@ NO_VIDEOS_TEXT = (
 
 STATUS_LABELS = {
     VideoStatus.PENDING.value: "На рассмотрении",
+    VideoStatus.CONFIRMED.value: "Подтверждён",
     VideoStatus.APPROVED.value: "Ожидает выплаты",
     VideoStatus.REJECTED.value: "Отклонено",
     VideoStatus.PAID.value: "Оплачено",
@@ -28,6 +29,7 @@ STATUS_LABELS = {
 PLATFORM_LABELS = {
     "youtube": "YouTube",
     "tiktok": "TikTok",
+    "instagram": "Instagram Reels",
 }
 @router.callback_query(F.data == "menu:my_videos")
 async def show_my_videos(callback: CallbackQuery) -> None:

@@ -10,6 +10,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 PAYOUT_RATE = 250
 MIN_WITHDRAWAL = 300
 WITHDRAWAL_DAYS = 3
+PAYOUT_VIEWS_THRESHOLD = 100_000
 DETAILS_TAIL_LENGTH = 4
 DEFAULT_LAST_NOTIFIED_THRESHOLD = 0
 
@@ -22,6 +23,7 @@ class VideoStatus(StrEnum):
     """Допустимые статусы заявки на видео."""
 
     PENDING = "pending"
+    CONFIRMED = "confirmed"
     APPROVED = "approved"
     REJECTED = "rejected"
     PAID = "paid"
@@ -33,6 +35,14 @@ class PaymentMethod(StrEnum):
     CARD = "card"
     USDT = "usdt"
     GGSTORE = "ggstore"
+
+
+class WithdrawalRequestStatus(StrEnum):
+    """Допустимые статусы общей заявки на вывод."""
+
+    PENDING = "pending"
+    PAID = "paid"
+    REJECTED = "rejected"
 
 
 class User(Base):
@@ -60,6 +70,9 @@ class User(Base):
     videos: Mapped[list["Video"]] = relationship(back_populates="user")
     withdrawals: Mapped[list["Withdrawal"]] = relationship(back_populates="user")
     payment_history: Mapped[list["PaymentHistory"]] = relationship(back_populates="user")
+    withdrawal_requests: Mapped[list["WithdrawalRequest"]] = relationship(
+        back_populates="user",
+    )
 
 
 class Video(Base):
@@ -90,6 +103,9 @@ class Video(Base):
         server_default="0",
         nullable=False,
     )
+    likes_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    comments_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    shares_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_notified_threshold: Mapped[int] = mapped_column(
         Integer,
         default=DEFAULT_LAST_NOTIFIED_THRESHOLD,
@@ -99,6 +115,14 @@ class Video(Base):
     reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     views_updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
+        nullable=True,
+    )
+    payout_notified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    active_withdrawal_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("withdrawal_requests.request_id"),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -159,3 +183,55 @@ class PaymentHistory(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="payment_history")
+
+
+class WithdrawalRequest(Base):
+    """Общая заявка пользователя на вывод по нескольким роликам."""
+
+    __tablename__ = "withdrawal_requests"
+
+    request_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), nullable=False)
+    total_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    method: Mapped[str] = mapped_column(String(32), nullable=False)
+    payment_details: Mapped[str] = mapped_column(Text, nullable=False)
+    details_tail: Mapped[str] = mapped_column(String(DETAILS_TAIL_LENGTH), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=WithdrawalRequestStatus.PENDING.value,
+        server_default=WithdrawalRequestStatus.PENDING.value,
+        nullable=False,
+    )
+    reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    paid_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    user: Mapped["User"] = relationship(back_populates="withdrawal_requests")
+    items: Mapped[list["WithdrawalRequestItem"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
+
+
+class WithdrawalRequestItem(Base):
+    """Снимок ролика и суммы в общей заявке на вывод."""
+
+    __tablename__ = "withdrawal_request_items"
+
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[int] = mapped_column(
+        ForeignKey("withdrawal_requests.request_id"),
+        nullable=False,
+    )
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.video_id"), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+
+    request: Mapped["WithdrawalRequest"] = relationship(back_populates="items")
+    video: Mapped["Video"] = relationship()

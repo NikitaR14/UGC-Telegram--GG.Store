@@ -9,12 +9,14 @@ from bot.config import get_settings
 from bot.services import video as video_service
 
 
-def test_detect_platform_supports_tiktok_and_youtube_shorts() -> None:
+def test_detect_platform_supports_tiktok_youtube_and_instagram_reels() -> None:
     """Проверяет распознавание поддерживаемых платформ по URL."""
 
     assert video_service.detect_platform("https://www.tiktok.com/@user/video/123") == "tiktok"
     assert video_service.detect_platform("https://youtube.com/shorts/abc123") == "youtube"
     assert video_service.detect_platform("https://youtu.be/abc123") == "youtube"
+    assert video_service.detect_platform("https://www.instagram.com/reel/ABC123/") == "instagram"
+    assert video_service.detect_platform("https://www.instagram.com/p/ABC123/") is None
     assert video_service.detect_platform("https://example.com/video") is None
 
 
@@ -26,6 +28,44 @@ def test_normalize_video_url_cleans_tiktok_tracking_tail() -> None:
     )
 
     assert normalized == "https://www.tiktok.com/@user/video/7647872771137031457"
+
+
+def test_normalize_video_url_cleans_instagram_reel_tracking_tail() -> None:
+    """Проверяет очистку Reels-ссылки от query и fragment."""
+
+    normalized = video_service.normalize_video_url(
+        "https://www.instagram.com/reel/ABC123/?igsh=test#fragment",
+    )
+
+    assert normalized == "https://www.instagram.com/reel/ABC123"
+
+
+def test_extract_ytdlp_metrics_reads_available_counters(monkeypatch) -> None:
+    """Проверяет преобразование метрик yt-dlp."""
+
+    class DummyYdl:
+        def __init__(self, options) -> None:
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict[str, int]:
+            return {
+                "view_count": 100_000,
+                "like_count": 7_500,
+                "comment_count": 320,
+                "repost_count": 81,
+            }
+
+    monkeypatch.setattr(video_service, "YoutubeDL", DummyYdl)
+
+    metrics = video_service.extract_ytdlp_metrics("https://instagram.com/reel/ABC123")
+
+    assert metrics == video_service.VideoMetrics(100_000, 7_500, 320, 81)
 
 
 def test_normalize_video_url_keeps_short_youtube_query() -> None:

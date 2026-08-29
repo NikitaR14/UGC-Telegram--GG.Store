@@ -11,8 +11,6 @@ from bot.handlers.admin.moderation import (
     PENDING_STATUS,
     REJECTED_STATUS,
     APPROVE_SUCCESS_TEXT,
-    APPROVE_WAITING_DETAILS_NOTICE_TEXT,
-    APPROVE_WAITING_DETAILS_TEXT,
     build_admin_all_videos_text,
     build_admin_detail_text,
     build_admin_list_items,
@@ -31,7 +29,6 @@ from bot.handlers.admin.moderation import (
     parse_video_id,
     shorten_admin_title,
 )
-from bot.services.notification import format_payment_method
 
 
 def build_user(**overrides) -> SimpleNamespace:
@@ -60,6 +57,9 @@ def build_video(**overrides) -> SimpleNamespace:
         "status": PENDING_STATUS,
         "payout_amount": 1500.0,
         "views_count": 12345,
+        "likes_count": 678,
+        "comments_count": None,
+        "shares_count": 42,
         "reject_reason": None,
         "created_at": datetime(2026, 5, 4, 12, 30, 0),
         "user": build_user(),
@@ -126,7 +126,7 @@ def test_payment_helpers_reflect_user_details_presence() -> None:
     assert has_payment_details(user_with_details) is True
     assert has_payment_details(user_without_details) is False
     assert build_admin_payment_details(user_without_details) == PAYMENT_DETAILS_EMPTY_TEXT
-    assert build_admin_payment_details(user_with_details) == "5555444433332222"
+    assert build_admin_payment_details(user_with_details) == "**** 2222"
 
 
 def test_build_admin_list_items_adds_payment_marker_for_approved() -> None:
@@ -156,8 +156,11 @@ def test_build_admin_detail_text_contains_payment_details_and_reason() -> None:
     text = build_admin_detail_text(video)
 
     assert "Банковская карта" in text
-    assert "<code>5555444433332222</code>" in text
+    assert "<code>**** 2222</code>" in text
+    assert "5555444433332222" not in text
     assert "12 345" in text
+    assert "678" in text
+    assert "недоступно" in text
     assert "<blockquote>Не соответствует требованиям</blockquote>" in text
 
 
@@ -171,68 +174,17 @@ def test_build_admin_all_videos_text_includes_user_and_views() -> None:
     assert "12 345" in text
 
 
-def test_build_admin_detail_text_shows_waiting_note_without_payment_details() -> None:
-    """Проверяет заметку об ожидании реквизитов у одобренной заявки."""
+def test_build_approve_success_text_does_not_expose_payment_details() -> None:
+    """Проверяет безопасный текст после одобрения ролика."""
 
-    video = build_video(
-        status=APPROVED_STATUS,
-        user=build_user(payment_method=None, payment_details=None),
-    )
+    text = build_approve_success_text(build_video(), "@tester")
 
-    text = build_admin_detail_text(video)
-
-    assert "ожидаем добавление реквизитов" in text
-    assert "После добавления реквизитов администраторам придёт уведомление." in text
-
-
-def test_build_approve_success_text_depends_on_payment_details() -> None:
-    """Проверяет развилку текста после одобрения заявки."""
-
-    user_with_details = build_user()
-    video_with_details = build_video(user=user_with_details)
-    user_without_details = build_user(payment_method=None, payment_details=None)
-    video_without_details = build_video(user=user_without_details)
-
-    with_details = build_approve_success_text(
-        video_with_details,
-        user_with_details,
-        "@tester",
-        True,
-    )
-    without_details = build_approve_success_text(
-        video_without_details,
-        user_without_details,
-        "@tester",
-        False,
-    )
-
-    assert with_details == APPROVE_SUCCESS_TEXT.format(
+    assert text == APPROVE_SUCCESS_TEXT.format(
         video_id=15,
         username_label="@tester",
         payout_amount=1500,
-        payment_method=format_payment_method("card"),
-        payment_details="5555444433332222",
     )
-    assert without_details == APPROVE_WAITING_DETAILS_TEXT.format(
-        video_id=15,
-        username_label="@tester",
-        payout_amount=1500,
-        payment_method=format_payment_method(None),
-        payment_details=PAYMENT_DETAILS_EMPTY_TEXT,
-    )
-
-
-def test_waiting_details_notice_text_mentions_application_and_followup() -> None:
-    """Проверяет текст отдельного сообщения об ожидании реквизитов."""
-
-    text = APPROVE_WAITING_DETAILS_NOTICE_TEXT.format(
-        video_id=15,
-        username_label="@tester",
-    )
-
-    assert "#00015" in text
-    assert "пока не указаны реквизиты" in text
-    assert "придёт уведомление" in text
+    assert "5555444433332222" not in text
 
 
 def test_error_text_helpers_return_human_messages() -> None:

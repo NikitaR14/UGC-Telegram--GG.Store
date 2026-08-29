@@ -43,6 +43,26 @@ async def create_pending_video_for_user(
     return video.video_id
 
 
+async def prepare_video_for_payout(repository: BotRepository, video_id: int) -> None:
+    """Подтверждает ролик и фиксирует порог просмотров."""
+
+    await repository.confirm_video(video_id)
+    await repository.update_video_views(video_id, 100_000)
+
+
+@pytest.mark.asyncio
+async def test_confirm_video_does_not_update_balance(repository: BotRepository) -> None:
+    """Проверяет первичное подтверждение без денежного начисления."""
+
+    video_id = await create_pending_video(repository)
+    video = await repository.confirm_video(video_id)
+    user = await repository.get_user(TEST_USER_ID)
+
+    assert video.status == VideoStatus.CONFIRMED.value
+    assert user is not None
+    assert user.balance == 0
+
+
 @pytest.mark.asyncio
 async def test_approve_video_updates_status_and_balance(
     repository: BotRepository,
@@ -50,6 +70,7 @@ async def test_approve_video_updates_status_and_balance(
     """Проверяет начисление баланса после одобрения заявки."""
 
     video_id = await create_pending_video(repository)
+    await prepare_video_for_payout(repository, video_id)
 
     approved_video = await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
     user = await repository.get_user(TEST_USER_ID)
@@ -87,6 +108,7 @@ async def test_mark_video_paid_creates_withdrawal_and_updates_user_totals(
         PaymentMethod.CARD.value,
         "5555444433332222",
     )
+    await prepare_video_for_payout(repository, video_id)
     await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
 
     withdrawal = await repository.mark_video_paid(video_id)
@@ -115,6 +137,7 @@ async def test_mark_video_paid_requires_payment_details(
     """Проверяет защиту от выплаты без привязанных реквизитов."""
 
     video_id = await create_pending_video(repository)
+    await prepare_video_for_payout(repository, video_id)
     await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
 
     with pytest.raises(ValueError, match="has no payment details"):
@@ -137,9 +160,10 @@ async def test_approve_video_rejects_invalid_status_transition(
     """Проверяет защиту от повторного одобрения уже обработанной заявки."""
 
     video_id = await create_pending_video(repository)
+    await prepare_video_for_payout(repository, video_id)
     await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
 
-    with pytest.raises(ValueError, match="must be in status pending"):
+    with pytest.raises(ValueError, match="must be in status confirmed"):
         await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
 
 
@@ -150,9 +174,10 @@ async def test_reject_video_rejects_invalid_status_transition(
     """Проверяет защиту от отклонения уже одобренной заявки."""
 
     video_id = await create_pending_video(repository)
+    await prepare_video_for_payout(repository, video_id)
     await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
 
-    with pytest.raises(ValueError, match="must be in status pending"):
+    with pytest.raises(ValueError, match="must be in status pending or confirmed"):
         await repository.reject_video(video_id, "Поздний отказ")
 
 
@@ -168,6 +193,7 @@ async def test_mark_video_paid_rejects_invalid_status_transition(
         PaymentMethod.CARD.value,
         "5555444433332222",
     )
+    await prepare_video_for_payout(repository, video_id)
 
     with pytest.raises(ValueError, match="must be in status approved"):
         await repository.mark_video_paid(video_id)
@@ -185,6 +211,8 @@ async def test_mark_video_paid_rejects_double_payment(
         PaymentMethod.CARD.value,
         "5555444433332222",
     )
+    await prepare_video_for_payout(repository, video_id)
+
     await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT)
     await repository.mark_video_paid(video_id)
 
@@ -226,6 +254,7 @@ async def test_get_user_withdrawals_page_returns_expected_pagination(
     )
     for index in range(DEFAULT_PAGE_SIZE + 1):
         video_id = await create_pending_video_for_user(repository, TEST_USER_ID, index)
+        await prepare_video_for_payout(repository, video_id)
         await repository.approve_video(video_id, TEST_PAYOUT_AMOUNT + index)
         await repository.mark_video_paid(video_id)
 
@@ -281,6 +310,7 @@ async def test_get_admin_videos_page_filters_by_status(
 
     approved_video_id = await create_pending_video(repository)
     rejected_video_id = await create_pending_video_for_user(repository, SECOND_USER_ID, 1)
+    await prepare_video_for_payout(repository, approved_video_id)
     await repository.approve_video(approved_video_id, TEST_PAYOUT_AMOUNT)
     await repository.reject_video(rejected_video_id, "Нарушение требований")
 
@@ -372,6 +402,24 @@ async def test_update_video_views_stores_latest_metrics(
     assert updated_video.views_count == 20000
     assert updated_video.last_notified_threshold == 20000
     assert updated_video.views_updated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_video_metrics_keeps_unavailable_optional_values(
+    repository: BotRepository,
+) -> None:
+    """Проверяет сохранение последних доступных метрик."""
+
+    video_id = await create_pending_video(repository)
+    await repository.update_video_metrics(video_id, 100, 10, 3, 2)
+
+    updated_video = await repository.update_video_metrics(video_id, 150)
+
+    assert updated_video is not None
+    assert updated_video.views_count == 150
+    assert updated_video.likes_count == 10
+    assert updated_video.comments_count == 3
+    assert updated_video.shares_count == 2
 
 
 @pytest.mark.asyncio

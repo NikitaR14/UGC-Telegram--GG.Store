@@ -5,13 +5,13 @@ import asyncio
 from aiogram import Bot
 from loguru import logger
 
-from bot.db import BotRepository, Video, get_session_factory
+from bot.db import BotRepository, User, Video, VideoStatus, get_session_factory
 from bot.services.notification import (
     VIDEO_VIEWS_MILESTONES,
     notify_admins_about_video_views_milestone,
     notify_video_views_milestone,
 )
-from bot.services.video import fetch_video_views
+from bot.services.video import fetch_video_metrics
 
 VIEWS_REFRESH_INTERVAL_SECONDS = 4 * 60 * 60
 VIEWS_REFRESH_BATCH_SIZE = 100
@@ -55,26 +55,47 @@ async def refresh_single_video_views(
 ) -> None:
     """Обновляет просмотры одного видео и отправляет нужные уведомления."""
 
-    views_count = await fetch_video_views(video.url)
-    if views_count is None:
+    metrics = await fetch_video_metrics(video.url)
+    if metrics is None:
         await repository.touch_video_views_refresh(video.video_id)
         return
 
-    reached_threshold = get_highest_reached_threshold(
-        views_count,
-        video.last_notified_threshold,
-    )
-    await repository.update_video_views(
+    reached_threshold = None
+    if video.status == VideoStatus.CONFIRMED.value:
+        reached_threshold = get_highest_reached_threshold(
+            metrics.views_count,
+            video.last_notified_threshold,
+        )
+    updated_video = await repository.update_video_metrics(
         video.video_id,
-        views_count,
+        metrics.views_count,
+        likes_count=metrics.likes_count,
+        comments_count=metrics.comments_count,
+        shares_count=metrics.shares_count,
         last_notified_threshold=reached_threshold or None,
     )
-    if reached_threshold is None or video.user is None:
+    if updated_video is None or video.user is None:
         return
+    if reached_threshold is not None:
+        await notify_video_views_milestone(bot, video.user, reached_threshold)
+    await notify_payout_ready_if_needed(bot, repository, video.user, updated_video)
 
-    await notify_video_views_milestone(bot, video.user, reached_threshold)
-    if reached_threshold >= 100000:
-        await notify_admins_about_video_views_milestone(bot, video.user, video)
+
+async def notify_payout_ready_if_needed(
+    bot: Bot,
+    repository: BotRepository,
+    user: User,
+    video: Video,
+) -> None:
+    """Уведомляет админов, когда подтверждённый ролик готов к выплате."""
+
+    if video.status != VideoStatus.CONFIRMED.value:
+        return
+    if video.views_count < 100_000 or video.payout_notified_at is not None:
+        return
+    is_delivered = await notify_admins_about_video_views_milestone(bot, user, video)
+    if is_delivered:
+        await repository.mark_payout_notification_sent(video.video_id)
 
 
 def get_highest_reached_threshold(

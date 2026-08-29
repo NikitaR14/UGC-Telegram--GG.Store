@@ -5,18 +5,23 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Optional
 
-from sqlalchemy import Select, desc, func, select
+from sqlalchemy import Select, desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from bot.db.models import (
     DETAILS_TAIL_LENGTH,
+    MIN_WITHDRAWAL,
+    PAYOUT_VIEWS_THRESHOLD,
     PaymentHistory,
     User,
     Video,
     VideoStatus,
     Withdrawal,
+    WithdrawalRequest,
+    WithdrawalRequestItem,
+    WithdrawalRequestStatus,
 )
 
 DEFAULT_PAGE_SIZE = 5
@@ -27,7 +32,7 @@ VIEWS_REFRESH_INTERVAL = timedelta(hours=4)
 class PageResult:
     """Результат пагинации для списков пользователя."""
 
-    items: list[Video] | list[Withdrawal] | list[PaymentHistory]
+    items: list[Video] | list[Withdrawal] | list[PaymentHistory] | list[WithdrawalRequest]
     page: int
     total_pages: int
 
@@ -142,11 +147,15 @@ class BotRepository:
             return video
 
     async def approve_video(self, video_id: int, payout_amount: float) -> Video:
-        """Переводит заявку в approved и начисляет баланс пользователю."""
+        """Одобряет выплату по подтверждённому ролику и начисляет баланс."""
 
+        if payout_amount <= 0:
+            raise ValueError("Payout amount must be positive")
         async with self._session_factory() as session:
             video = await self._require_video(session, video_id)
-            self._ensure_video_status(video, VideoStatus.PENDING)
+            self._ensure_video_status(video, VideoStatus.CONFIRMED)
+            if video.views_count < PAYOUT_VIEWS_THRESHOLD:
+                raise ValueError(f"Video {video.video_id} has not reached payout threshold")
             user = await self._require_user(session, video.user_id)
             video.status = VideoStatus.APPROVED.value
             video.payout_amount = payout_amount
@@ -156,12 +165,30 @@ class BotRepository:
             await session.refresh(video)
             return video
 
+    async def confirm_video(self, video_id: int) -> Video:
+        """Подтверждает оформление ролика без начисления денег."""
+
+        async with self._session_factory() as session:
+            video = await self._require_video(session, video_id)
+            self._ensure_video_status(video, VideoStatus.PENDING)
+            video.status = VideoStatus.CONFIRMED.value
+            video.reject_reason = None
+            await session.commit()
+            await session.refresh(video)
+            return video
+
     async def reject_video(self, video_id: int, reason: str) -> Video:
         """Переводит заявку в rejected и сохраняет причину отказа."""
 
         async with self._session_factory() as session:
             video = await self._require_video(session, video_id)
-            self._ensure_video_status(video, VideoStatus.PENDING)
+            if video.status not in {
+                VideoStatus.PENDING.value,
+                VideoStatus.CONFIRMED.value,
+            }:
+                raise ValueError(
+                    f"Video {video.video_id} must be in status pending or confirmed",
+                )
             video.status = VideoStatus.REJECTED.value
             video.reject_reason = reason
             await session.commit()
@@ -339,17 +366,246 @@ class BotRepository:
     ) -> Video | None:
         """Обновляет просмотры видео и служебные поля мониторинга."""
 
+        return await self.update_video_metrics(
+            video_id=video_id,
+            views_count=views_count,
+            last_notified_threshold=last_notified_threshold,
+        )
+
+    async def update_video_metrics(
+        self,
+        video_id: int,
+        views_count: int,
+        likes_count: int | None = None,
+        comments_count: int | None = None,
+        shares_count: int | None = None,
+        last_notified_threshold: int | None = None,
+    ) -> Video | None:
+        """Обновляет публичную статистику и служебные поля."""
+
         async with self._session_factory() as session:
             video = await session.get(Video, video_id)
             if video is None:
                 return None
             video.views_count = max(views_count, 0)
+            if likes_count is not None:
+                video.likes_count = likes_count
+            if comments_count is not None:
+                video.comments_count = comments_count
+            if shares_count is not None:
+                video.shares_count = shares_count
             video.views_updated_at = datetime.now(UTC)
             if last_notified_threshold is not None:
                 video.last_notified_threshold = last_notified_threshold
             await session.commit()
             await session.refresh(video)
             return video
+
+    async def mark_payout_notification_sent(self, video_id: int) -> None:
+        """Фиксирует отправку админского уведомления о выплате."""
+
+        async with self._session_factory() as session:
+            video = await session.get(Video, video_id)
+            if video is None or video.payout_notified_at is not None:
+                return
+            video.payout_notified_at = datetime.now(UTC)
+            await session.commit()
+
+    async def get_user_eligible_videos_page(
+        self,
+        user_id: int,
+        page: int,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> PageResult:
+        """Возвращает ролики, доступные для новой заявки на вывод."""
+
+        async with self._session_factory() as session:
+            query = select(Video).where(
+                Video.user_id == user_id,
+                Video.status == VideoStatus.APPROVED.value,
+                Video.active_withdrawal_request_id.is_(None),
+            )
+            return await self._paginate(session, query, Video.created_at, page, page_size)
+
+    async def get_user_videos_by_ids(self, user_id: int, video_ids: list[int]) -> list[Video]:
+        """Возвращает указанные ролики одного пользователя."""
+
+        if not video_ids:
+            return []
+        async with self._session_factory() as session:
+            query = (
+                select(Video)
+                .where(Video.user_id == user_id, Video.video_id.in_(video_ids))
+                .order_by(desc(Video.created_at))
+            )
+            return list(await session.scalars(query))
+
+    async def create_withdrawal_request(
+        self,
+        user_id: int,
+        video_ids: list[int],
+    ) -> WithdrawalRequest:
+        """Создаёт общую заявку и резервирует выбранные ролики."""
+
+        unique_ids = list(dict.fromkeys(video_ids))
+        if not unique_ids:
+            raise ValueError("Withdrawal request requires at least one video")
+        async with self._session_factory() as session:
+            user = await self._require_user(session, user_id)
+            if not user.payment_method or not user.payment_details:
+                raise ValueError(f"User {user_id} has no payment details")
+            query = select(Video).where(
+                Video.video_id.in_(unique_ids),
+                Video.user_id == user_id,
+                Video.status == VideoStatus.APPROVED.value,
+                Video.active_withdrawal_request_id.is_(None),
+            ).with_for_update()
+            videos = list(await session.scalars(query))
+            if len(videos) != len(unique_ids):
+                raise ValueError("Some videos are not available for withdrawal")
+            total_amount = round(sum(video.payout_amount for video in videos), 2)
+            if total_amount < MIN_WITHDRAWAL:
+                raise ValueError("Withdrawal amount is below minimum")
+            request = WithdrawalRequest(
+                user_id=user_id,
+                total_amount=total_amount,
+                method=user.payment_method,
+                payment_details=user.payment_details,
+                details_tail=self._build_details_tail(user.payment_details),
+            )
+            session.add(request)
+            await session.flush()
+            for video in videos:
+                video.active_withdrawal_request_id = request.request_id
+                session.add(
+                    WithdrawalRequestItem(
+                        request_id=request.request_id,
+                        video_id=video.video_id,
+                        amount=video.payout_amount,
+                    ),
+                )
+            await session.commit()
+            await session.refresh(request)
+            return request
+
+    async def get_withdrawal_request(self, request_id: int) -> WithdrawalRequest | None:
+        """Возвращает заявку с пользователем и роликами."""
+
+        async with self._session_factory() as session:
+            query = (
+                select(WithdrawalRequest)
+                .options(
+                    selectinload(WithdrawalRequest.user),
+                    selectinload(WithdrawalRequest.items).selectinload(
+                        WithdrawalRequestItem.video,
+                    ),
+                )
+                .where(WithdrawalRequest.request_id == request_id)
+            )
+            return await session.scalar(query)
+
+    async def get_admin_withdrawal_requests_page(
+        self,
+        status: str,
+        page: int,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> PageResult:
+        """Возвращает страницу общих заявок для админа."""
+
+        async with self._session_factory() as session:
+            query = (
+                select(WithdrawalRequest)
+                .options(selectinload(WithdrawalRequest.user))
+                .where(WithdrawalRequest.status == status)
+            )
+            return await self._paginate(
+                session,
+                query,
+                WithdrawalRequest.created_at,
+                page,
+                page_size,
+            )
+
+    async def pay_withdrawal_request(self, request_id: int) -> WithdrawalRequest:
+        """Атомарно оплачивает общую заявку и все её ролики."""
+
+        async with self._session_factory() as session:
+            request = await self._require_withdrawal_request(session, request_id)
+            self._ensure_withdrawal_status(request, WithdrawalRequestStatus.PENDING)
+            user = await self._require_user(session, request.user_id)
+            if user.balance < request.total_amount:
+                raise ValueError("User balance is below withdrawal amount")
+            items = list(
+                await session.scalars(
+                    select(WithdrawalRequestItem)
+                    .options(selectinload(WithdrawalRequestItem.video))
+                    .where(WithdrawalRequestItem.request_id == request_id),
+                ),
+            )
+            for item in items:
+                self._prepare_paid_withdrawal(session, request, item)
+            request.status = WithdrawalRequestStatus.PAID.value
+            request.paid_at = datetime.now(UTC)
+            user.balance -= request.total_amount
+            user.total_withdrawn += request.total_amount
+            session.add(
+                PaymentHistory(
+                    user_id=user.user_id,
+                    amount=request.total_amount,
+                    method=request.method,
+                    details=request.payment_details,
+                ),
+            )
+            await session.commit()
+            await session.refresh(request)
+            return request
+
+    async def reject_withdrawal_request(
+        self,
+        request_id: int,
+        reason: str,
+    ) -> WithdrawalRequest:
+        """Отклоняет общую заявку и освобождает её ролики."""
+
+        async with self._session_factory() as session:
+            request = await self._require_withdrawal_request(session, request_id)
+            self._ensure_withdrawal_status(request, WithdrawalRequestStatus.PENDING)
+            request.status = WithdrawalRequestStatus.REJECTED.value
+            request.reject_reason = reason
+            await session.execute(
+                update(Video)
+                .where(Video.active_withdrawal_request_id == request_id)
+                .values(active_withdrawal_request_id=None),
+            )
+            await session.commit()
+            await session.refresh(request)
+            return request
+
+    async def get_videos_for_export(
+        self,
+        created_from: datetime,
+        created_to: datetime,
+    ) -> list[Video]:
+        """Возвращает кандидатов для админского экспорта."""
+
+        statuses = (
+            VideoStatus.CONFIRMED.value,
+            VideoStatus.APPROVED.value,
+            VideoStatus.PAID.value,
+        )
+        async with self._session_factory() as session:
+            query = (
+                select(Video)
+                .options(selectinload(Video.user))
+                .where(
+                    Video.status.in_(statuses),
+                    Video.created_at >= created_from,
+                    Video.created_at < created_to,
+                )
+                .order_by(User.username, Video.created_at)
+                .join(Video.user)
+            )
+            return list(await session.scalars(query))
 
     async def touch_video_views_refresh(self, video_id: int) -> Video | None:
         """Фиксирует время последней попытки обновления просмотров."""
@@ -366,7 +622,7 @@ class BotRepository:
     async def _paginate(
         self,
         session: AsyncSession,
-        query: Select[tuple[Video]] | Select[tuple[Withdrawal]],
+        query: Select[tuple[object]],
         sort_column: object,
         page: int,
         page_size: int,
@@ -387,7 +643,7 @@ class BotRepository:
     async def _count_rows(
         self,
         session: AsyncSession,
-        query: Select[tuple[Video]] | Select[tuple[Withdrawal]] | Select[tuple[PaymentHistory]],
+        query: Select[tuple[object]],
     ) -> int:
         """Считает количество записей для пагинации."""
 
@@ -418,6 +674,55 @@ class BotRepository:
             raise ValueError(
                 f"Video {video.video_id} must be in status {expected_status.value}",
             )
+
+    async def _require_withdrawal_request(
+        self,
+        session: AsyncSession,
+        request_id: int,
+    ) -> WithdrawalRequest:
+        """Гарантирует наличие общей заявки на вывод."""
+
+        request = await session.get(WithdrawalRequest, request_id)
+        if request is None:
+            raise ValueError(f"Withdrawal request {request_id} not found")
+        return request
+
+    def _ensure_withdrawal_status(
+        self,
+        request: WithdrawalRequest,
+        expected_status: WithdrawalRequestStatus,
+    ) -> None:
+        """Проверяет статус общей заявки."""
+
+        if request.status != expected_status.value:
+            raise ValueError(
+                f"Withdrawal request {request.request_id} must be in status "
+                f"{expected_status.value}",
+            )
+
+    def _prepare_paid_withdrawal(
+        self,
+        session: AsyncSession,
+        request: WithdrawalRequest,
+        item: WithdrawalRequestItem,
+    ) -> None:
+        """Готовит один ролик к оплате в общей транзакции."""
+
+        video = item.video
+        if video.status != VideoStatus.APPROVED.value:
+            raise ValueError(f"Video {video.video_id} is not approved")
+        if video.active_withdrawal_request_id != request.request_id:
+            raise ValueError(f"Video {video.video_id} is not reserved by request")
+        video.status = VideoStatus.PAID.value
+        session.add(
+            Withdrawal(
+                user_id=request.user_id,
+                video_id=video.video_id,
+                amount=item.amount,
+                method=request.method,
+                details_tail=request.details_tail,
+            ),
+        )
 
     def _build_details_tail(self, payment_details: Optional[str]) -> str:
         """Возвращает последние 4 символа реквизитов или безопасную заглушку."""

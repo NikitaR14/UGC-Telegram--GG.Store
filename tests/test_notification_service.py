@@ -171,6 +171,8 @@ async def test_notify_admins_about_payment_details_sends_to_all_admins(
     assert [message["chat_id"] for message in bot.messages] == [111, 222]
     assert "<b>Раздел:</b> Одобренные" in str(bot.messages[0]["text"])
     assert "#00012, #00014" in str(bot.messages[0]["text"])
+    assert "**** LLET" in str(bot.messages[0]["text"])
+    assert "TRC20_TEST_WALLET" not in str(bot.messages[0]["text"])
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,8 @@ REQUIRED_TABLES = {
     "users",
     "videos",
     "withdrawals",
+    "withdrawal_request_items",
+    "withdrawal_requests",
 }
 
 

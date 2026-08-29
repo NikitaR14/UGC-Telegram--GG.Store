@@ -21,73 +21,60 @@ from bot.keyboards.admin_kb import (
     get_admin_dashboard_keyboard,
     get_admin_detail_keyboard,
     get_admin_list_keyboard,
-    get_admin_paid_keyboard,
     get_admin_video_keyboard,
-    get_admin_waiting_details_keyboard,
 )
 from bot.services.notification import (
     format_payment_method,
     notify_video_approved,
+    notify_video_confirmed,
     send_admin_notification,
-    notify_video_paid,
     notify_video_rejected,
 )
-from bot.services.metrika import MetrikaGoal, track_metrika_goal
 from bot.services.video import shorten_video_title
-from bot.ui.emojis import ERROR_TEXT, INBOX_TEXT, LIST_TEXT, PAYMENTS_TEXT, PIN_TEXT, SUCCESS_TEXT, SUPPORT_TEXT
+from bot.services.video_monitor import notify_payout_ready_if_needed
+from bot.ui.emojis import ERROR_TEXT, INBOX_TEXT, LIST_TEXT, PAYMENTS_TEXT, SUCCESS_TEXT, SUPPORT_TEXT
 
 router = Router(name="admin.moderation")
 
 PLATFORM_LABELS = {
     "youtube": "YouTube",
     "tiktok": "TikTok",
+    "instagram": "Instagram Reels",
 }
 STATUS_LABELS = {
     VideoStatus.PENDING.value: "На рассмотрении",
+    VideoStatus.CONFIRMED.value: "Подтверждён",
     VideoStatus.APPROVED.value: "Одобрено",
     VideoStatus.REJECTED.value: "Отклонено",
     VideoStatus.PAID.value: "Оплачено",
 }
 SECTION_TITLES = {
     VideoStatus.PENDING.value: f"{INBOX_TEXT} <b>Новые заявки</b>",
+    VideoStatus.CONFIRMED.value: f"{SUCCESS_TEXT} <b>Подтверждённые видео</b>",
     VideoStatus.APPROVED.value: f"{SUCCESS_TEXT} <b>Одобренные заявки</b>",
     VideoStatus.PAID.value: f"{PAYMENTS_TEXT} <b>Оплаченные заявки</b>",
     VideoStatus.REJECTED.value: f"{ERROR_TEXT} <b>Отклонённые заявки</b>",
     "all": f"{LIST_TEXT} <b>Все видео</b>",
 }
 PENDING_STATUS = "pending"
+CONFIRMED_STATUS = "confirmed"
 APPROVED_STATUS = "approved"
 REJECTED_STATUS = "rejected"
 PAID_STATUS = "paid"
 APPROVE_PROMPT_TEXT = "Введите сумму выплаты для заявки #{video_id:05d}:"
+CONFIRM_SUCCESS_TEXT = f"{SUCCESS_TEXT} Видео подтверждено успешно!"
 REJECT_PROMPT_TEXT = "Введите причину отклонения заявки #{video_id:05d}:"
 APPROVE_SUCCESS_TEXT = (
     f"{SUCCESS_TEXT} <b>Заявка #{{video_id:05d}} успешно принята.</b>\n\n"
     "<b>Пользователь:</b> {username_label}\n"
-    "<b>Сумма выплаты:</b> {payout_amount} ₽\n"
-    "<b>Способ вывода:</b> {payment_method}\n"
-    "<b>Реквизиты:</b> <code>{payment_details}</code>\n\n"
-    "Пользователь ждёт начисления средств."
-)
-APPROVE_WAITING_DETAILS_TEXT = (
-    f"{SUCCESS_TEXT} <b>Заявка #{{video_id:05d}} успешно принята.</b>\n\n"
-    "<b>Пользователь:</b> {username_label}\n"
-    "<b>Сумма выплаты:</b> {payout_amount} ₽\n"
-    "<b>Способ вывода:</b> {payment_method}\n"
-    "<b>Реквизиты:</b> <code>{payment_details}</code>\n\n"
-    "Ожидаем добавление реквизитов. После этого придёт отдельное уведомление."
-)
-APPROVE_WAITING_DETAILS_NOTICE_TEXT = (
-    f"{PIN_TEXT} <b>Ожидаем добавление реквизитов</b>\n\n"
-    "По заявке #{video_id:05d} у пользователя {username_label} пока не указаны реквизиты.\n"
-    "После добавления реквизитов администраторам придёт уведомление."
+    "<b>Сумма выплаты:</b> {payout_amount} ₽\n\n"
+    "Сумма доступна пользователю для создания заявки на вывод."
 )
 REJECT_SUCCESS_TEXT = (
     f"{ERROR_TEXT} <b>Заявка #{{video_id:05d}} успешно отклонена.</b>\n\n"
     "<b>Причина отказа:</b>\n"
     "<blockquote>{reason}</blockquote>"
 )
-PAID_SUCCESS_TEXT = f"{SUCCESS_TEXT} Заявка #{{video_id:05d}} оплачена."
 ADMIN_SESSION_REQUIRED_TEXT = "Сначала войдите в панель через /admin."
 ADMIN_DASHBOARD_TEXT = (
     f"{SUPPORT_TEXT} <b>Панель администратора</b>\n\n"
@@ -102,6 +89,51 @@ class ModerationState(StatesGroup):
 
     waiting_for_payout_amount = State()
     waiting_for_reject_reason = State()
+
+
+@router.callback_query(F.data.startswith("admin:confirm:"))
+async def confirm_video(callback: CallbackQuery) -> None:
+    """Подтверждает правильное оформление нового ролика."""
+
+    if not await is_valid_admin_callback(callback):
+        return
+    video_id = parse_video_id(callback.data)
+    if video_id is None:
+        await callback.answer()
+        return
+    repository = BotRepository(get_session_factory())
+    try:
+        video = await repository.confirm_video(video_id)
+    except ValueError as error:
+        await callback.answer(get_moderation_error_text(str(error)), show_alert=True)
+        return
+    user = await repository.get_user(video.user_id)
+    if user is None:
+        await callback.answer("Пользователь заявки не найден.", show_alert=True)
+        return
+    await callback.answer("Видео подтверждено.")
+    await _render_after_confirmation(callback, video)
+    await notify_video_confirmed(callback.bot, user, video)
+    await notify_payout_ready_if_needed(callback.bot, repository, user, video)
+
+
+async def _render_after_confirmation(callback: CallbackQuery, video: Video) -> None:
+    """Обновляет исходное админское сообщение."""
+
+    if callback.message is None:
+        return
+    list_status, list_page = parse_action_context(callback.data)
+    if list_status is None:
+        await callback.message.edit_text(CONFIRM_SUCCESS_TEXT)
+        return
+    await render_admin_detail_message(
+        bot=callback.bot,
+        video_id=video.video_id,
+        back_status=list_status,
+        back_page=list_page,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+    )
 
 
 @router.callback_query(F.data == "admin:dashboard")
@@ -206,8 +238,8 @@ async def request_approve_amount(callback: CallbackQuery, state: FSMContext) -> 
     if video_id is None:
         await callback.answer()
         return
-    if not await is_video_in_status(video_id, PENDING_STATUS):
-        await callback.answer("Заявка уже обработана.", show_alert=True)
+    if not await is_video_ready_for_payout(video_id):
+        await callback.answer("Видео ещё не готово к выплате.", show_alert=True)
         return
 
     list_status, list_page = parse_action_context(callback.data)
@@ -282,15 +314,6 @@ async def handle_approve_amount(message: Message, state: FSMContext) -> None:
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
         )
-    if not has_payment_details(user):
-        await send_waiting_details_notice(
-            bot=message.bot,
-            video=video,
-            user=user,
-            chat_id=message.chat.id,
-            back_status=list_status,
-            back_page=list_page,
-        )
     await notify_video_approved(message.bot, user, video)
 
 
@@ -305,7 +328,7 @@ async def request_reject_reason(callback: CallbackQuery, state: FSMContext) -> N
     if video_id is None:
         await callback.answer()
         return
-    if not await is_video_in_status(video_id, PENDING_STATUS):
+    if not await is_video_rejectable(video_id):
         await callback.answer("Заявка уже обработана.", show_alert=True)
         return
 
@@ -381,62 +404,6 @@ async def handle_reject_reason(message: Message, state: FSMContext) -> None:
     await notify_video_rejected(message.bot, user, video)
 
 
-@router.callback_query(F.data.startswith("admin:paid:"))
-async def mark_paid(callback: CallbackQuery) -> None:
-    """Подтверждает выплату по одобренной заявке."""
-
-    if not await is_valid_admin_callback(callback):
-        return
-
-    video_id = parse_video_id(callback.data)
-    if video_id is None:
-        await callback.answer()
-        return
-    if not await is_video_in_status(video_id, APPROVED_STATUS):
-        await callback.answer("Заявка недоступна для выплаты.", show_alert=True)
-        return
-
-    repository = BotRepository(get_session_factory())
-    video = await repository.get_video(video_id)
-    if video is None:
-        await callback.answer("Заявка не найдена.", show_alert=True)
-        return
-
-    try:
-        await repository.mark_video_paid(video_id)
-    except ValueError as error:
-        await callback.answer(get_paid_error_text(str(error)), show_alert=True)
-        return
-
-    user = await repository.get_user(video.user_id)
-    updated_video = await repository.get_video(video_id)
-    if user is not None and updated_video is not None:
-        await track_metrika_goal(
-            user,
-            MetrikaGoal.PAYOUT_SUM,
-            extra_params={
-                "video_id": updated_video.video_id,
-                "payout_amount": float(updated_video.payout_amount or 0),
-            },
-        )
-        await notify_video_paid(callback.bot, user, updated_video)
-
-    await callback.answer("Выплата подтверждена.")
-    if callback.message is not None:
-        list_status, list_page = parse_action_context(callback.data)
-        if list_status is not None:
-            await render_admin_detail_message(
-                bot=callback.bot,
-                video_id=video_id,
-                back_status=list_status,
-                back_page=list_page,
-                chat_id=callback.message.chat.id,
-                message_id=callback.message.message_id,
-            )
-        else:
-            await callback.message.edit_text(PAID_SUCCESS_TEXT.format(video_id=video_id))
-
-
 async def notify_admins_about_video(
     bot: Bot,
     video: Video,
@@ -491,59 +458,24 @@ async def update_admin_message_after_approve(
     username_label = f"@{user.username}" if user.username else "без username"
     if not isinstance(source_chat_id, int) or not isinstance(source_message_id, int):
         return
-    has_details = has_payment_details(user)
     await bot.edit_message_text(
         chat_id=source_chat_id,
         message_id=source_message_id,
-        text=build_approve_success_text(video, user, username_label, has_details),
-        reply_markup=get_admin_paid_keyboard(video.video_id) if has_details else None,
+        text=build_approve_success_text(video, username_label),
+        reply_markup=None,
     )
 
 
 def build_approve_success_text(
     video: Video,
-    user: User,
     username_label: str,
-    has_details: bool,
 ) -> str:
     """Формирует админский текст после одобрения заявки."""
 
-    template = APPROVE_SUCCESS_TEXT if has_details else APPROVE_WAITING_DETAILS_TEXT
-    payment_method = format_payment_method(user.payment_method)
-    payment_details = escape(build_admin_payment_details(user))
-    return template.format(
+    return APPROVE_SUCCESS_TEXT.format(
         video_id=video.video_id,
         username_label=username_label,
         payout_amount=int(video.payout_amount),
-        payment_method=payment_method,
-        payment_details=payment_details,
-    )
-
-
-async def send_waiting_details_notice(
-    bot: Bot,
-    video: Video,
-    user: User,
-    chat_id: int,
-    back_status: object,
-    back_page: object,
-) -> None:
-    """Отправляет отдельное сообщение администратору об ожидании реквизитов."""
-
-    username_label = f"@{user.username}" if user.username else "без username"
-    normalized_back_status = normalize_status(back_status) or APPROVED_STATUS
-    safe_back_page = normalize_page(back_page)
-    await bot.send_message(
-        chat_id=chat_id,
-        text=APPROVE_WAITING_DETAILS_NOTICE_TEXT.format(
-            video_id=video.video_id,
-            username_label=username_label,
-        ),
-        reply_markup=get_admin_waiting_details_keyboard(
-            video_id=video.video_id,
-            back_status=normalized_back_status,
-            back_page=safe_back_page,
-        ),
     )
 
 
@@ -651,7 +583,7 @@ async def render_admin_detail_page(
             current_status=video.status,
             back_status=list_status,
             back_page=list_page,
-            can_mark_paid=has_payment_details(video.user),
+            can_approve_payout=is_ready_for_payout(video),
         ),
     )
 
@@ -687,7 +619,7 @@ async def render_admin_detail_message(
             current_status=video.status,
             back_status=normalized_back_status,
             back_page=safe_back_page,
-            can_mark_paid=has_payment_details(video.user),
+            can_approve_payout=is_ready_for_payout(video),
         ),
         disable_web_page_preview=True,
     )
@@ -743,7 +675,11 @@ def format_admin_all_video_card(video: Video) -> str:
         f"<b>Название:</b> <a href=\"{video.url}\">{title}</a>\n"
         f"<b>Платформа:</b> {platform}\n"
         f"<b>Дата добавления:</b> {format_datetime(video.created_at)}\n"
-        f"<b>Просмотры:</b> {format_views_count(video.views_count)}"
+        f"<b>Статус:</b> {STATUS_LABELS.get(video.status, video.status)}\n"
+        f"<b>Просмотры:</b> {format_views_count(video.views_count)}\n"
+        f"<b>Лайки:</b> {format_optional_metric(video.likes_count)}\n"
+        f"<b>Комментарии:</b> {format_optional_metric(video.comments_count)}\n"
+        f"<b>Репосты:</b> {format_optional_metric(video.shares_count)}"
     )
 
 
@@ -765,17 +701,14 @@ def build_admin_detail_text(video: Video) -> str:
         f"<b>Платформа:</b> {platform}\n"
         f"<b>Дата:</b> {format_datetime(video.created_at)}\n"
         f"<b>Просмотры:</b> {format_views_count(video.views_count)}\n"
+        f"<b>Лайки:</b> {format_optional_metric(video.likes_count)}\n"
+        f"<b>Комментарии:</b> {format_optional_metric(video.comments_count)}\n"
+        f"<b>Репосты:</b> {format_optional_metric(video.shares_count)}\n"
         f"<b>Статус:</b> {status}\n"
         f"<b>Сумма выплаты:</b> {int(video.payout_amount)} ₽\n"
         f"<b>Способ вывода:</b> {payment_method}\n"
         f"<b>Реквизиты:</b> <code>{escape(payment_details)}</code>"
     )
-    if video.status == APPROVED_STATUS and not has_payment_details(video.user):
-        text += (
-            "\n\n"
-            "<b>Статус выплаты:</b> ожидаем добавление реквизитов.\n"
-            "После добавления реквизитов администраторам придёт уведомление."
-        )
     if video.reject_reason:
         text += (
             "\n<b>Причина отказа:</b>\n"
@@ -925,6 +858,31 @@ async def is_video_in_status(video_id: int, status: str) -> bool:
     return bool(video and video.status == status)
 
 
+async def is_video_ready_for_payout(video_id: int) -> bool:
+    """Проверяет статус и порог просмотров для выплаты."""
+
+    repository = BotRepository(get_session_factory())
+    video = await repository.get_video(video_id)
+    return bool(video and is_ready_for_payout(video))
+
+
+async def is_video_rejectable(video_id: int) -> bool:
+    """Проверяет, что ролик можно отклонить на текущем этапе."""
+
+    repository = BotRepository(get_session_factory())
+    video = await repository.get_video(video_id)
+    return bool(
+        video
+        and video.status in {VideoStatus.PENDING.value, VideoStatus.CONFIRMED.value}
+    )
+
+
+def is_ready_for_payout(video: Video) -> bool:
+    """Возвращает признак готовности ролика к выплате."""
+
+    return video.status == VideoStatus.CONFIRMED.value and video.views_count >= 100_000
+
+
 def normalize_status(value: str | None) -> str | None:
     """Проверяет, что статус относится к допустимым разделам админки."""
 
@@ -957,11 +915,11 @@ def has_payment_details(user: User | None) -> bool:
 
 
 def build_admin_payment_details(user: User | None) -> str:
-    """Возвращает реквизиты для детальной карточки администратора."""
+    """Возвращает маску реквизитов для карточки ролика."""
 
     if not has_payment_details(user):
         return PAYMENT_DETAILS_EMPTY_TEXT
-    return user.payment_details or PAYMENT_DETAILS_EMPTY_TEXT
+    return f"**** {(user.payment_details or '')[-4:]}"
 
 
 async def safe_edit_admin_text(
@@ -1014,8 +972,10 @@ def get_paid_error_text(error_text: str) -> str:
 def get_moderation_error_text(error_text: str) -> str:
     """Преобразует техническую ошибку модерации в понятный текст."""
 
-    if "must be in status pending" in error_text:
+    if "must be in status" in error_text:
         return "Заявка уже обработана."
+    if "payout threshold" in error_text:
+        return "Видео ещё не набрало 100 000 просмотров."
     if "not found" in error_text:
         return "Заявка не найдена."
     return "Не удалось обработать заявку."
@@ -1031,3 +991,11 @@ def format_views_count(value: int) -> str:
     """Форматирует число просмотров для интерфейса администратора."""
 
     return f"{max(value, 0):,}".replace(",", " ")
+
+
+def format_optional_metric(value: int | None) -> str:
+    """Форматирует метрику, которая может быть недоступна."""
+
+    if value is None:
+        return "недоступно"
+    return format_views_count(value)

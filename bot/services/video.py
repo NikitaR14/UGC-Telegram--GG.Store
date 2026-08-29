@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from importlib.util import find_spec
 import re
 import shutil
@@ -20,6 +21,9 @@ except ModuleNotFoundError:
     YoutubeDL = None
 
 TIKTOK_HOST_PART = "tiktok.com"
+INSTAGRAM_HOST_PART = "instagram.com"
+INSTAGRAM_SHORT_HOST = "instagr.am"
+INSTAGRAM_REEL_PATH_PART = "/reel/"
 YOUTUBE_HOST_PART = "youtube.com"
 SHORTS_PATH_PART = "/shorts/"
 YOUTU_BE_HOST = "youtu.be"
@@ -56,6 +60,8 @@ EXPECTED_VIDEO_VIEWS_ERROR_MARKERS = (
     "Private video",
     "This video is unavailable",
     "Unexpected response from webpage request",
+    "rate-limit reached or login required",
+    "Main webpage is locked behind the login page",
 )
 EXPECTED_VIDEO_TITLE_ERROR_MARKERS = (
     "Your IP address is blocked",
@@ -70,6 +76,16 @@ TIKTOK_HTML_DATA_MARKERS = (
     "SIGI_STATE",
     "itemStruct",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VideoMetrics:
+    """Доступная публичная статистика одного ролика."""
+
+    views_count: int
+    likes_count: int | None = None
+    comments_count: int | None = None
+    shares_count: int | None = None
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -149,7 +165,7 @@ def normalize_video_url(url: str) -> str:
     parsed_url = urlparse(candidate)
     hostname = (parsed_url.netloc or "").lower()
 
-    if TIKTOK_HOST_PART in hostname:
+    if TIKTOK_HOST_PART in hostname or _is_instagram_host(hostname):
         return urlunparse(
             (
                 parsed_url.scheme,
@@ -186,6 +202,8 @@ def detect_platform(url: str) -> str | None:
 
     if TIKTOK_HOST_PART in hostname:
         return "tiktok"
+    if _is_instagram_host(hostname) and INSTAGRAM_REEL_PATH_PART in path:
+        return "instagram"
     if YOUTUBE_HOST_PART in hostname and SHORTS_PATH_PART in path:
         return "youtube"
     if YOUTU_BE_HOST == hostname:
@@ -268,24 +286,31 @@ async def fetch_ytdlp_title(url: str) -> str | None:
 async def fetch_video_views(url: str) -> int | None:
     """Пытается получить число просмотров ролика."""
 
+    metrics = await fetch_video_metrics(url)
+    return metrics.views_count if metrics is not None else None
+
+
+async def fetch_video_metrics(url: str) -> VideoMetrics | None:
+    """Пытается получить публичные метрики ролика."""
+
     normalized_url = normalize_video_url(url)
     platform = detect_platform(normalized_url)
 
     if YoutubeDL is not None:
         try:
-            resolved_views = await asyncio.wait_for(
-                asyncio.to_thread(extract_ytdlp_views, normalized_url),
+            resolved_metrics = await asyncio.wait_for(
+                asyncio.to_thread(extract_ytdlp_metrics, normalized_url),
                 timeout=VIEWS_RESOLUTION_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             logger.warning("Video views resolution timed out | url={}", normalized_url)
-            resolved_views = None
+            resolved_metrics = None
         except Exception as error:
             log_video_views_error(normalized_url, str(error))
-            resolved_views = None
+            resolved_metrics = None
         else:
-            if resolved_views is not None:
-                return resolved_views
+            if resolved_metrics is not None:
+                return resolved_metrics
 
     if platform != "tiktok":
         return None
@@ -297,7 +322,9 @@ async def fetch_video_views(url: str) -> int | None:
     parsed_views = extract_tiktok_views_from_html(html)
     if parsed_views is not None:
         logger.info("TikTok views extracted from HTML fallback | url={}", normalized_url)
-    return parsed_views
+    if parsed_views is None:
+        return None
+    return VideoMetrics(views_count=parsed_views)
 
 
 def is_expected_video_views_error(error_text: str) -> bool:
@@ -352,6 +379,13 @@ def extract_ytdlp_title(url: str) -> str | None:
 def extract_ytdlp_views(url: str) -> int | None:
     """Синхронно извлекает число просмотров ролика через yt-dlp."""
 
+    metrics = extract_ytdlp_metrics(url)
+    return metrics.views_count if metrics is not None else None
+
+
+def extract_ytdlp_metrics(url: str) -> VideoMetrics | None:
+    """Синхронно извлекает метрики ролика через yt-dlp."""
+
     if YoutubeDL is None:
         return None
 
@@ -360,10 +394,39 @@ def extract_ytdlp_views(url: str) -> int | None:
         payload = ydl.extract_info(url, download=False)
     if not isinstance(payload, dict):
         return None
-    view_count = payload.get("view_count")
-    if not isinstance(view_count, int):
+    views_count = _normalize_metric(payload.get("view_count"))
+    if views_count is None:
         return None
-    return max(view_count, 0)
+    return VideoMetrics(
+        views_count=views_count,
+        likes_count=_normalize_metric(payload.get("like_count")),
+        comments_count=_normalize_metric(payload.get("comment_count")),
+        shares_count=_first_metric(payload, "repost_count", "share_count"),
+    )
+
+
+def _normalize_metric(value: object) -> int | None:
+    """Возвращает неотрицательный целочисленный счётчик."""
+
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return max(int(value), 0)
+
+
+def _first_metric(payload: dict[str, object], *keys: str) -> int | None:
+    """Возвращает первую доступную метрику из набора ключей."""
+
+    for key in keys:
+        metric = _normalize_metric(payload.get(key))
+        if metric is not None:
+            return metric
+    return None
+
+
+def _is_instagram_host(hostname: str) -> bool:
+    """Проверяет, что hostname принадлежит Instagram."""
+
+    return INSTAGRAM_HOST_PART in hostname or hostname == INSTAGRAM_SHORT_HOST
 
 
 def extract_tiktok_views_from_html(html: str) -> int | None:

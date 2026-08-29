@@ -33,12 +33,13 @@ router = Router(name="user.video")
 REQUEST_VIDEO_TEXT = (
     f"{VIDEO_TEXT} Пришлите ссылку на вертикальный видеоролик.\n\n"
     "Поддерживаемые платформы:\n"
-    "<blockquote>📺 TikTok, YouTube Shorts.</blockquote>\n\n"
+    "<blockquote>📺 TikTok, YouTube Shorts, Instagram Reels.</blockquote>\n\n"
     "Не забудьте добавить хэштег <b>#GGStoreUGCclips</b> при загрузке видео на хостинг!"
 )
 VIDEO_LINK_ERROR_TEXT = (
     '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> '
-    "Ссылка не распознана. Поддерживаются только TikTok и YouTube Shorts.\n"
+    "Ссылка не распознана. Поддерживаются TikTok, YouTube Shorts "
+    "и Instagram Reels.\n"
     "Попробуйте ещё раз или нажмите «Назад»."
 )
 

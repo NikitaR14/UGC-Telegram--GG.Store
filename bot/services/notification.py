@@ -14,7 +14,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from bot.config import get_settings
 from bot.db import BotRepository, User, Video, get_session_factory
-from bot.keyboards.admin_kb import get_admin_all_videos_keyboard
+from bot.keyboards.admin_kb import get_admin_payout_keyboard
 from bot.keyboards.user_kb import get_return_to_my_videos_keyboard
 from bot.services.video import shorten_video_title
 from bot.ui.emojis import BALANCE_TEXT, CARD_TEXT, DETAILS_ADDED_TEXT, ERROR_TEXT, SUCCESS_TEXT, STAR_TEXT, USDT_TEXT
@@ -74,20 +74,39 @@ async def notify_video_approved(bot: Bot, user: User, video: Video) -> None:
     if user.payment_details:
         text = (
             f"{SUCCESS_TEXT} <b>Поздравляем!</b>\n\n"
-            "Заявка на вывод средств по видео "
-            f"<a href=\"{video.url}\">{title}</a> была принята.\n"
-            f"Ожидайте начисление <b>{int(video.payout_amount)} ₽</b> на счёт "
-            f"<b>**** {user.payment_details[-4:]}</b>!"
+            f"Выплата по видео <a href=\"{video.url}\">{title}</a> одобрена.\n"
+            f"На ваш баланс зачислено <b>{int(video.payout_amount)} ₽</b>. "
+            "Создайте заявку на вывод в меню «Баланс» на счёт "
+            f"<b>**** {user.payment_details[-4:]}</b>."
         )
     else:
         text = (
             f"{SUCCESS_TEXT} <b>Поздравляем!</b>\n\n"
-            "Заявка на вывод средств по видео "
-            f"<a href=\"{video.url}\">{title}</a> была принята.\n"
-            "Привяжите пожалуйста платёжные реквизиты в меню «Баланс»."
+            f"Выплата по видео <a href=\"{video.url}\">{title}</a> одобрена.\n"
+            f"На ваш баланс зачислено <b>{int(video.payout_amount)} ₽</b>.\n"
+            "Привяжите пожалуйста платёжные реквизиты в меню «Баланс», "
+            "затем создайте заявку на вывод."
         )
 
     await _safe_notify(bot, user.user_id, text, "approved")
+
+
+async def notify_video_confirmed(bot: Bot, user: User, video: Video) -> None:
+    """Сообщает пользователю, что ролик прошёл первичную проверку."""
+
+    title = shorten_video_title(video.title or video.url)
+    text = (
+        f"{SUCCESS_TEXT} Ваше видео <a href=\"{video.url}\">{title}</a> подтверждено!\n\n"
+        "Как только видео наберёт необходимое количество просмотров, "
+        "бот автоматически уведомит вас о выплате вознаграждения 💸"
+    )
+    await _safe_notify(
+        bot,
+        user.user_id,
+        text,
+        "confirmed",
+        reply_markup=get_return_to_my_videos_keyboard(),
+    )
 
 
 async def notify_video_rejected(bot: Bot, user: User, video: Video) -> None:
@@ -137,7 +156,7 @@ async def notify_admins_about_video_views_milestone(
     bot: Bot,
     user: User,
     video: Video,
-) -> None:
+) -> bool:
     """Уведомляет администраторов о достижении видео отметки в 100 000 просмотров."""
 
     repository = BotRepository(get_session_factory())
@@ -147,17 +166,19 @@ async def notify_admins_about_video_views_milestone(
     text = (
         f"Пользователь {username_label} набрал 100 000 просмотров на видео "
         f"<a href=\"{video.url}\">{title}</a>. Необходимо выплатить вознаграждение. "
-        "Свяжитесь с пользователем для уточнения актуальных реквизитов."
+        "Укажите сумму или отклоните заявку."
     )
 
+    is_delivered = False
     for admin_id in admin_ids:
-        await _safe_notify_admin(
+        is_delivered = await _safe_notify_admin(
             bot=bot,
             admin_id=admin_id,
             text=text,
             operation="views_100000",
-            reply_markup=get_admin_all_videos_keyboard(),
-        )
+            reply_markup=get_admin_payout_keyboard(video.video_id),
+        ) or is_delivered
+    return is_delivered
 
 
 async def notify_admins_about_payment_details(
@@ -171,7 +192,9 @@ async def notify_admins_about_payment_details(
     admin_ids = await repository.get_active_admin_ids()
     username_label = f"@{user.username}" if user.username else "без username"
     method_label = format_payment_method(user.payment_method)
-    details_label = user.payment_details or "не указаны"
+    details_label = (
+        f"**** {user.payment_details[-4:]}" if user.payment_details else "не указаны"
+    )
     applications_line = build_applications_line(approved_video_ids)
     text = (
         f"{DETAILS_ADDED_TEXT} <b>Пользователь добавил реквизиты</b>\n\n"
@@ -232,7 +255,7 @@ async def _safe_notify_admin(
     text: str,
     operation: str,
     reply_markup: InlineKeyboardMarkup | None = None,
-) -> None:
+) -> bool:
     """Отправляет сообщение администратору и логирует Telegram-ошибки."""
 
     try:
@@ -242,6 +265,7 @@ async def _safe_notify_admin(
             text=text,
             reply_markup=reply_markup,
         )
+        return True
     except TelegramForbiddenError as error:
         logger.warning(
             "Admin notification forbidden | admin={} operation={} error={}",
@@ -263,6 +287,7 @@ async def _safe_notify_admin(
             operation,
             str(error),
         )
+    return False
 
 
 def format_payment_method(payment_method: str | None) -> str:
@@ -311,8 +336,7 @@ def build_video_views_milestone_text(views_threshold: int) -> str:
         100000: (
             "🏆 100 000 просмотров — вы это сделали!\n\n"
             "Поздравляем! Ваше видео набрало 100 000 просмотров. Это отличный результат, "
-            "которого достигают немногие. Мы выплачиваем вознаграждение за эту отметку — "
-            "с вами скоро свяжется наш менеджер для уточнения реквизитов 💰"
+            "которого достигают немногие. Заявка передана на одобрение выплаты 💰"
         ),
     }
     return milestone_texts[views_threshold]

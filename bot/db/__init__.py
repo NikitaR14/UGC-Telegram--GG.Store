@@ -7,6 +7,9 @@ from bot.db.models import (
     Video,
     VideoStatus,
     Withdrawal,
+    WithdrawalRequest,
+    WithdrawalRequestItem,
+    WithdrawalRequestStatus,
 )
 from bot.db.repository import BotRepository
 from bot.db.session import close_database, get_session_factory, init_database
@@ -19,6 +22,9 @@ __all__ = [
     "Video",
     "VideoStatus",
     "Withdrawal",
+    "WithdrawalRequest",
+    "WithdrawalRequestItem",
+    "WithdrawalRequestStatus",
     "close_database",
     "get_session_factory",
     "init_database",
