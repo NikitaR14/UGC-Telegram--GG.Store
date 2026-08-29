@@ -68,6 +68,70 @@ def test_extract_ytdlp_metrics_reads_available_counters(monkeypatch) -> None:
     assert metrics == video_service.VideoMetrics(100_000, 7_500, 320, 81)
 
 
+def test_extract_instagram_metrics_uses_play_count(monkeypatch) -> None:
+    """Проверяет использование публичного play_count для Reels."""
+
+    class DummyLoader:
+        def __init__(self, **kwargs) -> None:
+            self.context = object()
+
+    class DummyPost:
+        video_play_count = 631_177
+        video_view_count = None
+        likes = 49_291
+        comments = 94
+
+    class DummyPostFactory:
+        @staticmethod
+        def from_shortcode(context, shortcode: str) -> DummyPost:
+            assert shortcode == "Dclp2qwIqZ4"
+            return DummyPost()
+
+    monkeypatch.setattr(video_service, "Instaloader", DummyLoader)
+    monkeypatch.setattr(video_service, "InstagramPost", DummyPostFactory)
+
+    metrics = video_service.extract_instagram_metrics(
+        "https://www.instagram.com/reel/Dclp2qwIqZ4/",
+    )
+
+    assert metrics == video_service.VideoMetrics(631_177, 49_291, 94)
+
+
+@pytest.mark.asyncio
+async def test_fetch_video_metrics_uses_instagram_fallback(monkeypatch) -> None:
+    """Проверяет fallback после недоступного view_count в yt-dlp."""
+
+    expected = video_service.VideoMetrics(631_177, 49_291, 94)
+
+    async def fake_instagram_metrics(url: str) -> video_service.VideoMetrics:
+        return expected
+
+    monkeypatch.setattr(video_service, "YoutubeDL", None)
+    monkeypatch.setattr(video_service, "fetch_instagram_metrics", fake_instagram_metrics)
+
+    metrics = await video_service.fetch_video_metrics(
+        "https://www.instagram.com/reel/Dclp2qwIqZ4/",
+    )
+
+    assert metrics == expected
+
+
+@pytest.mark.asyncio
+async def test_fetch_instagram_metrics_keeps_monitor_alive_on_error(monkeypatch) -> None:
+    """Проверяет безопасный результат при временной ошибке Instagram."""
+
+    async def fake_to_thread(*args, **kwargs) -> None:
+        raise video_service.InstaloaderException("temporarily blocked")
+
+    monkeypatch.setattr(video_service.asyncio, "to_thread", fake_to_thread)
+
+    metrics = await video_service.fetch_instagram_metrics(
+        "https://www.instagram.com/reel/Dclp2qwIqZ4/",
+    )
+
+    assert metrics is None
+
+
 def test_normalize_video_url_keeps_short_youtube_query() -> None:
     """Проверяет сохранение query у коротких YouTube-ссылок."""
 

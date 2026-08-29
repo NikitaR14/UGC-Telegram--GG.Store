@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
+from instaloader import Instaloader, Post as InstagramPost
+from instaloader.exceptions import InstaloaderException
 from loguru import logger
 
 from bot.config import get_settings
@@ -47,6 +49,7 @@ TITLE_CLEANUP_SUFFIXES = (
 REQUEST_TIMEOUT_SECONDS = 10
 TITLE_RESOLUTION_TIMEOUT_SECONDS = 2.5
 VIEWS_RESOLUTION_TIMEOUT_SECONDS = 6
+INSTAGRAM_RESOLUTION_TIMEOUT_SECONDS = 12
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
 EXPECTED_VIDEO_VIEWS_ERROR_MARKERS = (
@@ -312,6 +315,8 @@ async def fetch_video_metrics(url: str) -> VideoMetrics | None:
             if resolved_metrics is not None:
                 return resolved_metrics
 
+    if platform == "instagram":
+        return await fetch_instagram_metrics(normalized_url)
     if platform != "tiktok":
         return None
 
@@ -325,6 +330,26 @@ async def fetch_video_metrics(url: str) -> VideoMetrics | None:
     if parsed_views is None:
         return None
     return VideoMetrics(views_count=parsed_views)
+
+
+async def fetch_instagram_metrics(url: str) -> VideoMetrics | None:
+    """Получает счётчик воспроизведений Reels через резервный источник."""
+
+    try:
+        metrics = await asyncio.wait_for(
+            asyncio.to_thread(extract_instagram_metrics, url),
+            timeout=INSTAGRAM_RESOLUTION_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.info("Instagram metrics resolution timed out | url={}", url)
+        return None
+    except (InstaloaderException, KeyError, TypeError, ValueError) as error:
+        logger.info("Instagram metrics skipped | url={} reason={}", url, str(error))
+        return None
+
+    if metrics is not None:
+        logger.info("Instagram play count extracted | url={}", url)
+    return metrics
 
 
 def is_expected_video_views_error(error_text: str) -> bool:
@@ -403,6 +428,44 @@ def extract_ytdlp_metrics(url: str) -> VideoMetrics | None:
         comments_count=_normalize_metric(payload.get("comment_count")),
         shares_count=_first_metric(payload, "repost_count", "share_count"),
     )
+
+
+def extract_instagram_metrics(url: str) -> VideoMetrics | None:
+    """Синхронно получает публичные метрики Reels по shortcode."""
+
+    shortcode = extract_instagram_shortcode(url)
+    if shortcode is None:
+        return None
+
+    loader = Instaloader(
+        quiet=True,
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+        save_metadata=False,
+    )
+    post = InstagramPost.from_shortcode(loader.context, shortcode)
+    views_count = _normalize_metric(post.video_play_count)
+    if views_count is None:
+        views_count = _normalize_metric(post.video_view_count)
+    if views_count is None:
+        return None
+    return VideoMetrics(
+        views_count=views_count,
+        likes_count=_normalize_metric(post.likes),
+        comments_count=_normalize_metric(post.comments),
+    )
+
+
+def extract_instagram_shortcode(url: str) -> str | None:
+    """Извлекает shortcode из нормализованной ссылки Instagram Reel."""
+
+    if detect_platform(url) != "instagram":
+        return None
+    path_parts = [part for part in urlparse(normalize_video_url(url)).path.split("/") if part]
+    if len(path_parts) < 2 or path_parts[0].lower() != "reel":
+        return None
+    return path_parts[1]
 
 
 def _normalize_metric(value: object) -> int | None:
