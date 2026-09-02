@@ -12,6 +12,8 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from bot.db import Video
 
 APP_TIMEZONE = ZoneInfo("Europe/Kyiv")
+EXPORT_PAYOUT_RATE = 350
+EXPORT_PAYOUT_VIEWS_STEP = 10_000
 HEADER_FILL = PatternFill("solid", fgColor="172A3A")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 LIGHT_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
@@ -120,7 +122,7 @@ def _build_detail_row(video: Video, refresh_status: str) -> tuple[object, ...]:
         video.likes_count,
         video.comments_count,
         video.shares_count,
-        video.payout_amount,
+        calculate_export_payout(video.views_count),
         PAYMENT_METHOD_LABELS.get(
             video.user.payment_method if video.user else None,
             "Не указан",
@@ -129,6 +131,14 @@ def _build_detail_row(video: Video, refresh_status: str) -> tuple[object, ...]:
         updated_at,
         refresh_status,
     )
+
+
+def calculate_export_payout(views_count: int) -> float:
+    """Рассчитывает сумму отчёта по ставке за просмотры."""
+
+    normalized_views = max(views_count, 0)
+    payout = normalized_views / EXPORT_PAYOUT_VIEWS_STEP * EXPORT_PAYOUT_RATE
+    return round(payout, 2)
 
 
 def _populate_summary_sheet(sheet, videos: list[Video]) -> None:

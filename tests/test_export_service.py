@@ -6,7 +6,11 @@ from types import SimpleNamespace
 from openpyxl import load_workbook
 
 from bot.handlers.admin.export import build_utc_range, parse_date
-from bot.services.export import build_export_filename, create_videos_workbook
+from bot.services.export import (
+    build_export_filename,
+    calculate_export_payout,
+    create_videos_workbook,
+)
 
 
 def build_video(video_id: int, username: str, views_count: int) -> SimpleNamespace:
@@ -49,6 +53,8 @@ def test_create_videos_workbook_builds_detail_and_formula_summary(tmp_path) -> N
     assert workbook.sheetnames == ["Сводка", "Ролики"]
     assert detail.max_row == 3
     assert detail["H2"].value == 120_000
+    assert detail["L2"].value == 4_200
+    assert detail["L3"].value == 7_000
     assert isinstance(detail["F2"].value, datetime)
     assert detail["N2"].value == "4111111111111234"
     assert detail["M2"].value == "Банковская карта"
@@ -60,6 +66,14 @@ def test_create_videos_workbook_builds_detail_and_formula_summary(tmp_path) -> N
     assert detail.page_setup.orientation == "landscape"
     assert detail.page_setup.fitToWidth == 1
     workbook.close()
+
+
+def test_calculate_export_payout_uses_rate_per_ten_thousand_views() -> None:
+    """Проверяет пропорциональный расчёт 350 ₽ за 10 000 просмотров."""
+
+    assert calculate_export_payout(10_000) == 350
+    assert calculate_export_payout(222_042) == 7_771.47
+    assert calculate_export_payout(-10) == 0
 
 
 def test_export_date_range_is_inclusive_in_kyiv_timezone() -> None:
