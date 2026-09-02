@@ -14,6 +14,7 @@ def build_video(**overrides) -> SimpleNamespace:
     payload = {
         "video_id": 17,
         "url": "https://youtube.com/shorts/example",
+        "platform": "youtube",
         "last_notified_threshold": 0,
         "status": "confirmed",
         "views_count": 0,
@@ -125,6 +126,30 @@ async def test_refresh_single_video_views_keeps_previous_state_on_fetch_error(
 
 
 @pytest.mark.asyncio
+async def test_refresh_instagram_video_does_not_touch_during_cooldown(
+    monkeypatch,
+) -> None:
+    """Проверяет сохранение Reels в очереди во время паузы Instagram."""
+
+    repository = DummyRepository()
+
+    async def unexpected_fetch(url: str) -> VideoMetrics | None:
+        raise AssertionError("Запрос не должен выполняться во время cooldown")
+
+    monkeypatch.setattr(video_monitor, "fetch_video_metrics", unexpected_fetch)
+    monkeypatch.setattr(video_monitor, "is_instagram_cooldown_active", lambda: True)
+
+    await video_monitor.refresh_single_video_views(
+        bot=object(),
+        repository=repository,
+        video=build_video(platform="instagram"),
+    )
+
+    assert repository.updated_payload is None
+    assert repository.touched_video_id is None
+
+
+@pytest.mark.asyncio
 async def test_payout_notification_is_retried_when_no_admin_received_it(
     monkeypatch,
 ) -> None:
@@ -180,3 +205,47 @@ async def test_refresh_video_views_now_uses_fresh_repository(
     await video_monitor.refresh_video_views_now(object(), 33)
 
     assert refresh_calls == [33]
+
+
+@pytest.mark.asyncio
+async def test_refresh_due_video_views_uses_separate_instagram_queue(
+    monkeypatch,
+) -> None:
+    """Проверяет независимые лимиты обычных роликов и Instagram."""
+
+    class QueueRepository(DummyRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.query_calls: list[dict[str, object]] = []
+
+        async def get_videos_due_for_views_refresh(self, limit: int, **kwargs):
+            self.query_calls.append({"limit": limit, **kwargs})
+            if kwargs.get("platform") == "instagram":
+                return [build_video(video_id=2, platform="instagram")]
+            return [build_video(video_id=1, platform="youtube")]
+
+    repository = QueueRepository()
+    refreshed_ids: list[int] = []
+
+    async def fake_refresh(bot, current_repository, video) -> None:
+        assert current_repository is repository
+        refreshed_ids.append(video.video_id)
+
+    monkeypatch.setattr(video_monitor, "BotRepository", lambda _: repository)
+    monkeypatch.setattr(video_monitor, "get_session_factory", lambda: None)
+    monkeypatch.setattr(video_monitor, "refresh_single_video_views", fake_refresh)
+
+    await video_monitor.refresh_due_video_views(object())
+
+    assert repository.query_calls == [
+        {
+            "limit": video_monitor.VIEWS_REFRESH_BATCH_SIZE,
+            "exclude_platform": "instagram",
+        },
+        {
+            "limit": video_monitor.INSTAGRAM_REFRESH_BATCH_SIZE,
+            "platform": "instagram",
+            "refresh_interval": video_monitor.INSTAGRAM_REFRESH_INTERVAL,
+        },
+    ]
+    assert refreshed_ids == [2, 1]

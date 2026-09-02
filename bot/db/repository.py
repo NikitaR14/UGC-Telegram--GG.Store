@@ -343,15 +343,30 @@ class BotRepository:
             rows = await session.scalars(query)
             return list(rows)
 
-    async def get_videos_due_for_views_refresh(self, limit: int = 100) -> list[Video]:
+    async def get_videos_due_for_views_refresh(
+        self,
+        limit: int = 100,
+        *,
+        platform: str | None = None,
+        exclude_platform: str | None = None,
+        refresh_interval: timedelta = VIEWS_REFRESH_INTERVAL,
+    ) -> list[Video]:
         """Возвращает видео, для которых пора обновить счётчик просмотров."""
 
-        cutoff = datetime.now(UTC) - VIEWS_REFRESH_INTERVAL
+        cutoff = datetime.now(UTC) - refresh_interval
+        conditions = [
+            Video.status.in_((VideoStatus.PENDING.value, VideoStatus.CONFIRMED.value)),
+            Video.views_updated_at.is_(None) | (Video.views_updated_at <= cutoff),
+        ]
+        if platform is not None:
+            conditions.append(Video.platform == platform)
+        if exclude_platform is not None:
+            conditions.append(Video.platform != exclude_platform)
         async with self._session_factory() as session:
             query = (
                 select(Video)
                 .options(selectinload(Video.user))
-                .where(Video.views_updated_at.is_(None) | (Video.views_updated_at <= cutoff))
+                .where(*conditions)
                 .order_by(Video.views_updated_at.asc().nullsfirst(), desc(Video.created_at))
                 .limit(limit)
             )

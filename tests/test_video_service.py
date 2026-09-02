@@ -99,14 +99,18 @@ def test_extract_instagram_metrics_uses_play_count(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_video_metrics_uses_instagram_fallback(monkeypatch) -> None:
-    """Проверяет fallback после недоступного view_count в yt-dlp."""
+    """Проверяет отдельный безопасный источник метрик Instagram."""
 
     expected = video_service.VideoMetrics(631_177, 49_291, 94)
+
+    class UnexpectedYdl:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("yt-dlp не должен использоваться для метрик Instagram")
 
     async def fake_instagram_metrics(url: str) -> video_service.VideoMetrics:
         return expected
 
-    monkeypatch.setattr(video_service, "YoutubeDL", None)
+    monkeypatch.setattr(video_service, "YoutubeDL", UnexpectedYdl)
     monkeypatch.setattr(video_service, "fetch_instagram_metrics", fake_instagram_metrics)
 
     metrics = await video_service.fetch_video_metrics(
@@ -124,12 +128,45 @@ async def test_fetch_instagram_metrics_keeps_monitor_alive_on_error(monkeypatch)
         raise video_service.InstaloaderException("temporarily blocked")
 
     monkeypatch.setattr(video_service.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(video_service, "INSTAGRAM_REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(video_service, "_instagram_next_request_at", 0.0)
+    monkeypatch.setattr(video_service, "_instagram_cooldown_until", 0.0)
 
     metrics = await video_service.fetch_instagram_metrics(
         "https://www.instagram.com/reel/Dclp2qwIqZ4/",
     )
 
     assert metrics is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_instagram_metrics_starts_cooldown_on_rate_limit(monkeypatch) -> None:
+    """Проверяет остановку повторных запросов после ответа о лимите."""
+
+    calls = 0
+
+    async def fake_to_thread(*args, **kwargs) -> None:
+        nonlocal calls
+        calls += 1
+        raise video_service.InstaloaderException(
+            '401 Unauthorized: "Please wait a few minutes before you try again."',
+        )
+
+    monkeypatch.setattr(video_service.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(video_service, "INSTAGRAM_REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(video_service, "_instagram_next_request_at", 0.0)
+    monkeypatch.setattr(video_service, "_instagram_cooldown_until", 0.0)
+
+    first = await video_service.fetch_instagram_metrics(
+        "https://www.instagram.com/reel/Dclp2qwIqZ4/",
+    )
+    second = await video_service.fetch_instagram_metrics(
+        "https://www.instagram.com/reel/Dclp2qwIqZ4/",
+    )
+
+    assert first is None
+    assert second is None
+    assert calls == 1
 
 
 def test_normalize_video_url_keeps_short_youtube_query() -> None:

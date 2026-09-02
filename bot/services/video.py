@@ -50,6 +50,17 @@ REQUEST_TIMEOUT_SECONDS = 10
 TITLE_RESOLUTION_TIMEOUT_SECONDS = 2.5
 VIEWS_RESOLUTION_TIMEOUT_SECONDS = 6
 INSTAGRAM_RESOLUTION_TIMEOUT_SECONDS = 12
+INSTAGRAM_REQUEST_INTERVAL_SECONDS = 30
+INSTAGRAM_RATE_LIMIT_COOLDOWN_SECONDS = 60 * 60
+INSTAGRAM_RATE_LIMIT_MARKERS = (
+    "401 Unauthorized",
+    "Please wait a few minutes",
+    "rate-limit reached",
+)
+
+_instagram_request_lock = asyncio.Lock()
+_instagram_next_request_at = 0.0
+_instagram_cooldown_until = 0.0
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 TIKTOK_OEMBED_URL = "https://www.tiktok.com/oembed"
 EXPECTED_VIDEO_VIEWS_ERROR_MARKERS = (
@@ -299,6 +310,9 @@ async def fetch_video_metrics(url: str) -> VideoMetrics | None:
     normalized_url = normalize_video_url(url)
     platform = detect_platform(normalized_url)
 
+    if platform == "instagram":
+        return await fetch_instagram_metrics(normalized_url)
+
     if YoutubeDL is not None:
         try:
             resolved_metrics = await asyncio.wait_for(
@@ -315,8 +329,6 @@ async def fetch_video_metrics(url: str) -> VideoMetrics | None:
             if resolved_metrics is not None:
                 return resolved_metrics
 
-    if platform == "instagram":
-        return await fetch_instagram_metrics(normalized_url)
     if platform != "tiktok":
         return None
 
@@ -335,21 +347,67 @@ async def fetch_video_metrics(url: str) -> VideoMetrics | None:
 async def fetch_instagram_metrics(url: str) -> VideoMetrics | None:
     """Получает счётчик воспроизведений Reels через резервный источник."""
 
-    try:
-        metrics = await asyncio.wait_for(
-            asyncio.to_thread(extract_instagram_metrics, url),
-            timeout=INSTAGRAM_RESOLUTION_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        logger.info("Instagram metrics resolution timed out | url={}", url)
-        return None
-    except (InstaloaderException, KeyError, TypeError, ValueError) as error:
-        logger.info("Instagram metrics skipped | url={} reason={}", url, str(error))
-        return None
+    async with _instagram_request_lock:
+        if is_instagram_cooldown_active():
+            logger.info("Instagram metrics deferred during cooldown | url={}", url)
+            return None
+        await wait_for_instagram_request_slot()
+        try:
+            metrics = await asyncio.wait_for(
+                asyncio.to_thread(extract_instagram_metrics, url),
+                timeout=INSTAGRAM_RESOLUTION_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.info("Instagram metrics resolution timed out | url={}", url)
+            return None
+        except (InstaloaderException, KeyError, TypeError, ValueError) as error:
+            error_text = str(error)
+            if is_instagram_rate_limit_error(error_text):
+                start_instagram_cooldown()
+            logger.info("Instagram metrics skipped | url={} reason={}", url, error_text)
+            return None
 
     if metrics is not None:
         logger.info("Instagram play count extracted | url={}", url)
     return metrics
+
+
+async def wait_for_instagram_request_slot() -> None:
+    """Выдерживает интервал между публичными запросами Instagram."""
+
+    global _instagram_next_request_at
+
+    loop = asyncio.get_running_loop()
+    delay = max(_instagram_next_request_at - loop.time(), 0.0)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    _instagram_next_request_at = loop.time() + INSTAGRAM_REQUEST_INTERVAL_SECONDS
+
+
+def is_instagram_cooldown_active() -> bool:
+    """Проверяет активность паузы после ограничения запросов."""
+
+    return asyncio.get_running_loop().time() < _instagram_cooldown_until
+
+
+def is_instagram_rate_limit_error(error_text: str) -> bool:
+    """Распознаёт временное ограничение публичных запросов Instagram."""
+
+    normalized_error = error_text.lower()
+    return any(marker.lower() in normalized_error for marker in INSTAGRAM_RATE_LIMIT_MARKERS)
+
+
+def start_instagram_cooldown() -> None:
+    """Приостанавливает запросы Instagram после ответа о лимите."""
+
+    global _instagram_cooldown_until
+
+    loop = asyncio.get_running_loop()
+    _instagram_cooldown_until = loop.time() + INSTAGRAM_RATE_LIMIT_COOLDOWN_SECONDS
+    logger.warning(
+        "Instagram rate limit detected; metrics paused | cooldown_seconds={}",
+        INSTAGRAM_RATE_LIMIT_COOLDOWN_SECONDS,
+    )
 
 
 def is_expected_video_views_error(error_text: str) -> bool:

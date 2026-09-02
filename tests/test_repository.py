@@ -426,16 +426,46 @@ async def test_update_video_metrics_keeps_unavailable_optional_values(
 async def test_get_videos_due_for_views_refresh_returns_only_stale_videos(
     repository: BotRepository,
 ) -> None:
-    """Проверяет выборку видео, которым пора обновлять просмотры."""
+    """Проверяет выборку только активных видео с устаревшими метриками."""
 
     first_video_id = await create_pending_video_for_user(repository, TEST_USER_ID, 1)
     second_video_id = await create_pending_video_for_user(repository, SECOND_USER_ID, 2)
     await repository.update_video_views(second_video_id, 150)
+    rejected_video_id = await create_pending_video_for_user(repository, 3003, 3)
+    await repository.reject_video(rejected_video_id, "Архивная заявка")
 
     due_videos = await repository.get_videos_due_for_views_refresh()
 
     assert any(video.video_id == first_video_id for video in due_videos)
     assert all(video.video_id != second_video_id for video in due_videos)
+    assert all(video.video_id != rejected_video_id for video in due_videos)
+
+
+@pytest.mark.asyncio
+async def test_get_videos_due_for_views_refresh_filters_platforms(
+    repository: BotRepository,
+) -> None:
+    """Проверяет разделение обычной очереди и очереди Instagram."""
+
+    youtube_id = await create_pending_video_for_user(repository, TEST_USER_ID, 1)
+    await repository.upsert_user(SECOND_USER_ID, "instagram_user")
+    instagram_video = await repository.create_video(
+        SECOND_USER_ID,
+        "https://www.instagram.com/reel/ABC123/",
+        "instagram",
+        "Instagram",
+    )
+
+    instagram_due = await repository.get_videos_due_for_views_refresh(
+        platform="instagram",
+    )
+    regular_due = await repository.get_videos_due_for_views_refresh(
+        exclude_platform="instagram",
+    )
+
+    assert [video.video_id for video in instagram_due] == [instagram_video.video_id]
+    assert youtube_id in [video.video_id for video in regular_due]
+    assert instagram_video.video_id not in [video.video_id for video in regular_due]
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 from aiogram import Bot
 from loguru import logger
@@ -11,11 +12,13 @@ from bot.services.notification import (
     notify_admins_about_video_views_milestone,
     notify_video_views_milestone,
 )
-from bot.services.video import fetch_video_metrics
+from bot.services.video import fetch_video_metrics, is_instagram_cooldown_active
 
 VIEWS_REFRESH_INTERVAL_SECONDS = 4 * 60 * 60
 VIEWS_REFRESH_BATCH_SIZE = 100
 VIEWS_MONITOR_POLL_INTERVAL_SECONDS = 5 * 60
+INSTAGRAM_REFRESH_BATCH_SIZE = 2
+INSTAGRAM_REFRESH_INTERVAL = timedelta(hours=12)
 
 
 async def run_video_views_monitor(bot: Bot) -> None:
@@ -33,8 +36,16 @@ async def refresh_due_video_views(bot: Bot) -> None:
     """Обновляет просмотры у видео, для которых подошёл срок проверки."""
 
     repository = BotRepository(get_session_factory())
-    videos = await repository.get_videos_due_for_views_refresh(VIEWS_REFRESH_BATCH_SIZE)
-    for video in videos:
+    regular_videos = await repository.get_videos_due_for_views_refresh(
+        VIEWS_REFRESH_BATCH_SIZE,
+        exclude_platform="instagram",
+    )
+    instagram_videos = await repository.get_videos_due_for_views_refresh(
+        INSTAGRAM_REFRESH_BATCH_SIZE,
+        platform="instagram",
+        refresh_interval=INSTAGRAM_REFRESH_INTERVAL,
+    )
+    for video in [*instagram_videos, *regular_videos]:
         await refresh_single_video_views(bot, repository, video)
 
 
@@ -55,8 +66,12 @@ async def refresh_single_video_views(
 ) -> None:
     """Обновляет просмотры одного видео и отправляет нужные уведомления."""
 
+    if video.platform == "instagram" and is_instagram_cooldown_active():
+        return
     metrics = await fetch_video_metrics(video.url)
     if metrics is None:
+        if video.platform == "instagram" and is_instagram_cooldown_active():
+            return
         await repository.touch_video_views_refresh(video.video_id)
         return
 
