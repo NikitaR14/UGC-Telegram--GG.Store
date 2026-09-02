@@ -13,7 +13,7 @@ from bot.db import Video
 
 APP_TIMEZONE = ZoneInfo("Europe/Kyiv")
 EXPORT_PAYOUT_RATE = 350
-EXPORT_PAYOUT_VIEWS_STEP = 10_000
+EXPORT_PAYOUT_VIEWS_STEP = 100_000
 HEADER_FILL = PatternFill("solid", fgColor="172A3A")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 LIGHT_BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
